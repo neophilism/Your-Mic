@@ -86,6 +86,7 @@ try{
  s=await req(base+'/control','POST',{action:'select',controller,version:s.event.version,trackId:b.id},host);
  assert.notEqual(s.event.playback_id,playingId);assert.equal(s.event.position,0);
  await req(base+'/control','POST',{action:'pause',controller,playbackId:playingId,position:200},host,409);
+ await req(base+'/control','POST',{action:'play',controller,playbackId:playingId},host,409);
  assert.equal((await req(base,'GET',undefined,host)).event.status,'playing');
  await req(base+'/control','POST',{action:'heartbeat',controller,playbackId:playingId,position:200},host);
  assert.equal((await req(base,'GET',undefined,host)).event.position,0);
@@ -97,6 +98,30 @@ try{
  await DB.prepare("UPDATE events SET controller_until=?,position=?,started_at=?,status='playing' WHERE id=?").bind(Date.now()-5000,23.5,Date.now()-600000,created.id).run();
  const reconnected=await req(base+'/control','POST',{action:'claim',controller},host);
  assert.equal(reconnected.event.position,23.5);
+ // Artist-only play reporting is independent of the transport and deduplicates retries.
+ const stats=base+'/plays', report={trackId:a.id,playbackId:randomUUID(),kind:'live'};
+ await req(stats,'GET',undefined,{},401);await req(stats,'GET',undefined,{'oai-authenticated-user-id':'other'},403);
+ await req(stats,'POST',report,guest,401);await req(stats,'POST',report,{'oai-authenticated-user-id':'other'},403);
+ const beforeStats=await req(base,'GET',undefined,host);
+ assert.equal((await req(stats,'GET',undefined,owner)).totalLivePlays,0);
+ await req(stats,'POST',{trackId:a.id,playbackId:'invalid',kind:'live'},owner,400);
+ await req(stats,'POST',{trackId:randomUUID(),playbackId:randomUUID(),kind:'live'},owner,404);
+ await Promise.all(Array.from({length:12},()=>req(stats,'POST',report,owner)));
+ await req(stats,'POST',{...report,trackId:b.id},owner); // Same audio instance cannot be counted against a second song.
+ await req(stats,'POST',{...report,playbackId:randomUUID()},owner); // New repeat of the same song.
+ await req(stats,'POST',{trackId:b.id,playbackId:randomUUID(),kind:'rap'},owner); // Delayed report for an earlier song.
+ const privateReport={trackId:a.id,playbackId:randomUUID(),kind:'preview'};
+ await req(stats,'POST',privateReport,{},400);await req(stats,'POST',privateReport,guest);await req(stats,'POST',privateReport,guest);
+ await req(stats,'POST',{...privateReport,playbackId:randomUUID()},guest2);
+ await req(stats,'POST',{...privateReport,playbackId:randomUUID(),kind:'rap'},guest,401);
+ const counts=await req(stats,'GET',undefined,owner);assert.equal(counts.totalLivePlays,3);assert.equal(counts.totalRapPlays,1);assert.equal(counts.totalPrivatePlays,2);assert.equal(counts.tracks.find(t=>t.id===a.id).livePlays,2);assert.equal(counts.tracks.find(t=>t.id===a.id).privatePlays,2);assert.equal(counts.tracks.find(t=>t.id===b.id).rapPlays,1);
+ assert.deepEqual((await req(base,'GET',undefined,host)).event,beforeStats.event,'Reporting cannot change playback state');
+ assert(!(await req(base,'GET',undefined,guest)).tracks.some(t=>'livePlays' in t||'privatePlays' in t||'rapPlays' in t),'Counts must not enter audience snapshots');
+ const untouched=await req('events/'+withoutLabel.id+'/plays','GET',undefined,owner);assert.equal(untouched.totalLivePlays,0);
+ await DB.prepare('DROP TABLE track_plays').run();await req(stats,'POST',{...report,playbackId:randomUUID()},owner,500);
+ await req(base+'/control','POST',{action:'heartbeat',controller,playbackId:reconnected.event.playback_id,position:24},host);
+ assert.equal((await req(base,'GET',undefined,host)).event.position,24,'A broken statistics store cannot break playback or snapshots');
+ console.log('Play counts passed: artist-only reads/writes, zero counts, concurrent deduplication, repeats, delayed reports, privacy, transport isolation and failed-store independence.');
  console.log('Integration passed: event ownership, uploads, beat playback, QR, consent/export, anonymous queue, duplicate prevention, FIFO, all three modes, boundary changes, resume/repeat, completion, speaker lease, stale advances, seeking and reorder.');
 }finally{await mf.dispose();}
 
