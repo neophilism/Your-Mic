@@ -350,3 +350,14 @@ a change racing with queue insertion. Re-checking immediately allows new
 requests again. Existing queued/playing turns remain intact; the artist can
 remove a waiting entry separately if needed. The setting does not change
 transport, audio files, playlist order, playback IDs or the event version.
+
+
+## Spoken song titles
+
+The MC removes an explicit leading numeric list prefix such as `6. `, `30. `
+or `06) ` from a track's spoken title. Playlist labels, file names, order and
+playback remain unchanged. Numbers that belong to titles such as `99 Problems`,
+`1999` and `30.06` remain. Defaults and `{track}` placeholders use the cleaned
+title; explicitly written custom speech is preserved. Cleaned contexts and
+text generate distinct cached recordings so old numbered clips are not reused.
+Refresh the artist page between songs to load the updated MC plans.
