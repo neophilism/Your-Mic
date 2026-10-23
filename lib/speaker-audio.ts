@@ -160,7 +160,9 @@ export class SpeakerAudioCache {
   private createURL: (blob: Blob) => string;
   private revokeURL: (url: string) => void;
   constructor(fetcher: typeof fetch = fetch, createURL = (blob: Blob) => URL.createObjectURL(blob), revokeURL = (url: string) => URL.revokeObjectURL(url)) {
-    this.fetcher = fetcher;this.createURL = createURL;this.revokeURL = revokeURL;
+    // Native browser fetch requires the Window/global receiver. Calling an
+    // unbound reference as this.fetcher throws TypeError: Illegal invocation.
+    this.fetcher = fetcher.bind(globalThis);this.createURL = createURL;this.revokeURL = revokeURL;
   }
 
   get(source: string): Promise<string> {
