@@ -68,6 +68,6 @@ try{
  const publicView=await req(base,'GET',undefined,guest);assert(!JSON.stringify(publicView.tracks).includes('mc_intro_text'));assert(!JSON.stringify(publicView.tracks).includes('Make room'));
  await req(base+'/mc','POST',{kind:'track-start',trackId:'a'},guest,401);
  // Missing speech cannot stall a selected song.
- s=await req(base);s=await command(s,'select',{trackId:'a',trackOpeningClips:{}});assert.equal(s.event.current_track,'a');assert.equal(s.event.status,'playing');assert.equal(s.event.announcement_id,null);
+ s=await req(base+'/mc','PATCH',{endAfterTrack:true});s=await command(s,'select',{trackId:'a',trackOpeningClips:{}});assert.equal(s.event.current_track,'a');assert.equal(s.event.status,'playing');assert.equal(s.event.announcement_id,null);
  console.log('Split MC passed: per-track credits, show intro -> track intro -> music, late queue changes, same-track new rappers, stale packet rejection, real-order opening selection, custom scripts, optional ending, privacy and missing-voice fallback.');
 }finally{await mf.dispose();}

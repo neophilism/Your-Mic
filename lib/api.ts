@@ -62,7 +62,7 @@ async function splitTransition(e:any,b:any,r:Request,now:number){
     const track=ts.find(t=>t.id===b.trackId);if(!track)fail(404,'Track not found.');
     pick={mode:e.mode==='auto'?'auto':'album',entry:null,track,cursor:track.id};
   }
-  const ending=b.action==='end'||!!e.end_after_track;
+  const ending=b.action==='end'||!!e.end_after_track&&(b.action==='next'||b.action==='finish-announcement'&&e.announcement_kind==='track-end');
   if(ending)pick={mode:pick.mode,entry:null,track:null,cursor:e.album_cursor};
   const starting=b.action==='play'&&!e.current_track&&!e.intro_played;
   const special=ending?(e.outro_enabled?mcSpecialPlan(e,'outro'):null):starting?(e.intro_enabled?mcSpecialPlan(e,'intro'):null):null;
