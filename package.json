@@ -13,7 +13,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/playback.mjs tests/queue-pass.mjs tests/cloudflare-resources.mjs tests/speaker-audio.mjs tests/play-counts.mjs tests/speaker-session.mjs tests/speaker-opening.mjs && node --experimental-strip-types tests/integration.mjs && node --experimental-strip-types tests/rap-requests.mjs && node --experimental-strip-types tests/speaker-lease.mjs && node --experimental-strip-types tests/standalone.mjs && node --experimental-strip-types tests/mc.mjs && node --experimental-strip-types tests/mc-flux.mjs && node --experimental-strip-types tests/mc-bookends.mjs",
+    "test": "node --experimental-strip-types --test tests/playback.mjs tests/queue-pass.mjs tests/cloudflare-resources.mjs tests/speaker-audio.mjs tests/play-counts.mjs tests/speaker-session.mjs tests/speaker-opening.mjs tests/mc-titles.mjs && node --experimental-strip-types tests/integration.mjs && node --experimental-strip-types tests/rap-requests.mjs && node --experimental-strip-types tests/speaker-lease.mjs && node --experimental-strip-types tests/standalone.mjs && node --experimental-strip-types tests/mc.mjs && node --experimental-strip-types tests/mc-flux.mjs && node --experimental-strip-types tests/mc-bookends.mjs",
     "test:load": "node --experimental-strip-types tests/load.mjs",
     "build:cloudflare": "vite build --config vite.cloudflare.config.ts",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
