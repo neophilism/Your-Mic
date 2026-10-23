@@ -29,7 +29,8 @@ The audience can privately preview any track and, if supplied, its instrumental.
 - At the end of a performance, the participant sees **You made it yours.** and another streaming-release signup invitation.
 - Speaker control uses a per-tab token and renewable lease to prevent multiple artist devices from controlling playback simultaneously. An explicit takeover transfers control.
 - Playback advances use a version check so duplicate or stale next-track requests cannot skip multiple performers.
-- Queue passes remain in browser storage. Release signup records and event state are durable in D1; uploaded audio is in R2.
+- Queue places remain on the server when someone browses another website, closes the page or locks their phone. A per-event anonymous pass is saved in local storage with a cookie fallback. Returning to the same event restores the place; a private return link can restore it in another browser/device. If storage is blocked, the app asks the person to save that link. The queue continues to advance while they are away.
+- Release signup records and event state are durable in D1; uploaded audio is in R2. Email and social sign-in are not required to queue or restore a pass. Background push alerts are not enabled yet.
 - Emails and browser queue secrets are not included in public event snapshots. All artist operations and subscriber exports check event ownership on the server.
 
 ## Local development and verification
@@ -41,6 +42,7 @@ node node_modules/typescript/bin/tsc --noEmit
 node --experimental-strip-types --test tests/playback.mjs
 node --experimental-strip-types tests/integration.mjs
 node --experimental-strip-types tests/standalone.mjs
+node --experimental-strip-types --test tests/queue-pass.mjs tests/cloudflare-resources.mjs
 node --experimental-strip-types tests/load.mjs
 ```
 

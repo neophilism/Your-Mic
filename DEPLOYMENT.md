@@ -27,7 +27,27 @@ The free Workers tier's 100,000 dynamic requests/day would be consumed in about 
 - A local isolated Miniflare simulation with 300 distinct queue participants, ten 300-client snapshot bursts, duplicate joins, and 20 simultaneous advance requests. Exactly one advance won; the others safely returned conflicts.
 - These checks exercise application correctness. They do **not** certify deployed capacity, browser audio, cellular reception, provider latency, or physical speaker operation. Run a hosted rehearsal before directing the crowd to the new URL.
 
-## Deploy independently to Cloudflare
+## Quick setup: deploy through GitHub
+
+The repository includes **Actions → Deploy Your Mic to Cloudflare**, an explicitly started workflow. It creates or reuses the named D1 database and private R2 bucket, keeps an existing account workers.dev subdomain, applies migrations, builds and publishes the Worker, configures artist secrets, and checks the live health and artist login. It does not purchase a plan, change billing, change DNS, delete storage, or deploy on ordinary source pushes.
+
+1. Create/sign in to a [Cloudflare account](https://dash.cloudflare.com/sign-up), verify the email, enable **Workers Paid ($5/month minimum)** and **R2 Standard** billing. This app can start on the included `workers.dev` address, so buying a domain or a website Pro plan is unnecessary.
+2. Copy the Cloudflare **Account ID**. Create a scoped API token for that account with **Workers Scripts: Edit**, **D1: Edit**, **Workers R2 Storage: Edit**, and **Account Settings: Read**. If using the **Edit Cloudflare Workers** template, ensure **D1: Edit** is added. Restrict account resources to the intended account. No DNS permissions or Global API key are needed for the default workers.dev deployment.
+3. In the GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+   | Secret name | Value |
+   | --- | --- |
+   | `CLOUDFLARE_ACCOUNT_ID` | The account ID |
+   | `CLOUDFLARE_API_TOKEN` | The scoped token |
+   | `ARTIST_PASSWORD` | A strong password you choose, at least 16 characters, for your artist studio |
+
+   Set secret values directly in GitHub. Do not paste passwords, tokens or payment details in chat or commit them. The workflow generates a separate `SESSION_SECRET` on the first deployment and preserves it on later deployments.
+4. Open **Actions → Deploy Your Mic to Cloudflare → Run workflow**, choosing `main`. The successful run summary links to the live site and artist studio. The setup script updates the database ID within the temporary checkout; it need not write back to the repository, and later runs look up the same named resources again.
+5. Log into `/admin` using your artist password, upload the album/beats, and rehearse the actual phone/speaker flow. Use the new event QR. Existing Sites data is not automatically copied.
+
+The cloud provisioning workflow is covered by mocked resource-reuse/permission-failure tests. Its real provider operations and hosted checks cannot run until the account, plan and secrets are configured.
+
+## Alternative: deploy from a local checkout
 
 1. Enable **Workers Paid** and **R2 Standard** on the intended Cloudflare account. Connect the repository or deploy from a checkout. Node 22.13+ and the package-manager version pinned in `package.json` are required. Run `corepack enable` and `pnpm install --frozen-lockfile` if using Corepack.
 2. Authenticate with `pnpm exec wrangler login`. Select the intended account and set `CLOUDFLARE_ACCOUNT_ID` when multiple accounts are available. For CI, use a scoped Cloudflare API token stored as a CI secret, never in Git.
@@ -72,7 +92,8 @@ The repository contains code, schema and deployment configuration. It does not c
 
 - Keep one artist tab open, awake, connected to reliable internet and the speaker. Claim speaker control before playback; avoid deployments during the show.
 - At least the upcoming audio must be fetched over the internet. The app is not a fully offline player. A physical local music copy is useful if the venue connection fails, but an offline copy does not provide online queue changes.
-- On mobile, audio requires a user interaction. Queue alerts appear while the page is open; background push notifications are not implemented.
+- On mobile, audio requires a user interaction. Queue membership does not depend on keeping the page open. The browser remembers an anonymous queue pass; the private pass link also recovers it on another device. The recovery token lives in the URL fragment and is not included in public event links or HTTP URLs. Keep the private link to yourself.
+- The queue keeps moving while a participant is away. They can miss their turn if it passes before they return; the artist can see/call the next name. Queue alerts appear while the page is open; background push notifications are not implemented. Adding full user accounts would not by itself provide background alerts.
 - `Listen along` follows approximate track position; it is not a low-latency microphone stream or sample-accurate synchronization system. The web app does not record live vocals.
 - Release addresses are collected with consent and exportable. Sending album-release email still requires an email provider.
 - Watch Worker errors, CPU time, D1 latency and request counts during the rehearsal and first event. The configured 100 ms per-invocation CPU ceiling is not a monthly spending cap. D1 and R2 retain their own service limits.

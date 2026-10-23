@@ -13,12 +13,13 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/playback.mjs && node --experimental-strip-types tests/integration.mjs && node --experimental-strip-types tests/standalone.mjs",
+    "test": "node --experimental-strip-types --test tests/playback.mjs tests/queue-pass.mjs tests/cloudflare-resources.mjs && node --experimental-strip-types tests/integration.mjs && node --experimental-strip-types tests/standalone.mjs",
     "test:load": "node --experimental-strip-types tests/load.mjs",
     "build:cloudflare": "vite build --config vite.cloudflare.config.ts",
     "deploy:cloudflare": "node scripts/deploy-cloudflare.mjs",
     "dev:cloudflare": "vite --config vite.cloudflare.config.ts",
-    "db:migrate:cloudflare": "wrangler d1 migrations apply your-mic --remote --config wrangler.cloudflare.jsonc"
+    "db:migrate:cloudflare": "wrangler d1 migrations apply your-mic --remote --config wrangler.cloudflare.jsonc",
+    "cloudflare:launch": "node scripts/launch-cloudflare.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
