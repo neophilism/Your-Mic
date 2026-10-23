@@ -2,13 +2,26 @@
 // Server polling may change the transport or source, but must never seek an
 // already-loaded song to catch up with a wall clock after buffering or latency.
 export type SpeakerTarget = {key: string; source: string; status: string; position: number};
-type SpeakerMedia = Pick<HTMLAudioElement, 'src' | 'paused' | 'ended' | 'readyState' | 'duration' | 'currentTime' | 'pause' | 'play' | 'load' | 'addEventListener' | 'removeEventListener'>;
+export function speakerFailureMessage(error: unknown) {
+  const e = error as {name?: string; message?: string; mediaCode?: number};
+  if (e?.name === 'NotAllowedError') return 'The browser blocked automatic audio. Click Resume speaker to allow playback.';
+  if (e?.name === 'NotSupportedError' || e?.mediaCode === 3 || e?.mediaCode === 4) return 'The browser could not decode this audio. Resume speaker will reload it. If this repeats on the same song, its audio file needs checking.';
+  if (e?.name === 'AudioDownloadError') return e.message || 'The complete audio could not download. Press Resume speaker to retry.';
+  return `Audio could not start${e?.name ? ` (${e.name})` : ''}. Press Resume speaker to retry.`;
+}
+export function currentSpeakerFailure(playerKey: string | undefined, event: {playback_id?: string} | undefined) {return !!playerKey && !!event?.playback_id && playerKey === event.playback_id;}
+type SpeakerMedia = Pick<HTMLAudioElement, 'src' | 'paused' | 'ended' | 'readyState' | 'duration' | 'currentTime' | 'pause' | 'play' | 'load' | 'addEventListener' | 'removeEventListener'> & {readonly currentSrc?: string; readonly error?: {code: number; message?: string} | null};
 
 export class SpeakerPlayback {
   private target: SpeakerTarget | null = null;
   private generation = 0;
   private loaded = false;
   private playRequest = 0;
+  private playAttempt = 0;
+  private failedGeneration = -1;
+  private resolvedSource = '';
+  private abortRetries = 0;
+  private retry: ReturnType<typeof setTimeout> | null = null;
   private metadata: (() => void) | null = null;
   private startPosition = 0;
   private stoppedPosition: {key: string; position: number} | null = null;
@@ -39,8 +52,12 @@ export class SpeakerPlayback {
       target = {...target, position: this.startPosition};
     }
     this.clearMetadata();
+    this.clearRetry();
     this.target = target;
     this.loaded = false;
+    this.resolvedSource = '';
+    this.abortRetries = 0;
+    this.playRequest = 0;this.playAttempt++;
     const generation = ++this.generation;
     this.audio.pause();
     this.loading(true);
@@ -51,32 +68,71 @@ export class SpeakerPlayback {
     void this.resolveSource(target.source).then(source => {
       if (generation !== this.generation) return;
       this.metadata = () => {
-        if (generation !== this.generation) return;
+        if (generation !== this.generation || this.failedGeneration === generation) return;
         this.clearMetadata();
+        this.loaded = true;
         if (position > 0) this.audio.currentTime = Number.isFinite(this.audio.duration) ? Math.min(position, Math.max(0, this.audio.duration - 0.05)) : position;
         this.loading(false);
+        this.applyStatus();
       };
       this.audio.addEventListener('loadedmetadata', this.metadata);
+      this.resolvedSource = source;
       this.audio.src = source;
       this.audio.load();
-      this.loaded = true;
-      this.applyStatus();
     }).catch(error => {
       if (generation !== this.generation) return;
       this.loading(false);
-      this.failed(error);
+      this.reportFailure(error);
     });
   }
 
   private applyStatus() {
-    if (!this.target || this.target.status !== 'playing') {this.audio.pause(); return;}
-    if (this.audio.ended || !this.audio.paused || this.playRequest === this.generation) return;
+    if (!this.target || this.target.status !== 'playing') {this.playAttempt++;this.playRequest = 0;this.clearRetry();this.audio.pause();return;}
+    if (!this.loaded || this.failedGeneration === this.generation || this.audio.ended || !this.audio.paused || this.playRequest) return;
     const generation = this.generation;
-    this.playRequest = generation;
-    void Promise.resolve(this.audio.play()).catch(error => {
-      if (generation === this.generation && this.target?.status === 'playing') this.failed(error);
-    }).finally(() => {if (this.playRequest === generation) this.playRequest = 0;});
+    const attempt = ++this.playAttempt;
+    this.playRequest = attempt;
+    // A pause/load can abort a pending browser play promise. Each attempt has
+    // its own identity: a late rejection must not pause a newer successful play.
+    void Promise.resolve().then(() => {
+      if (generation !== this.generation || attempt !== this.playAttempt) return;
+      return this.audio.play();
+    }).catch(error => {
+      if (generation !== this.generation || attempt !== this.playAttempt || this.target?.status !== 'playing') return;
+      if (error?.name === 'AbortError' && !this.audio.error && this.abortRetries++ < 2) {
+        this.retry = setTimeout(() => {this.retry = null;if (generation === this.generation) this.applyStatus();}, 50);
+      } else this.reportFailure(error);
+    }).finally(() => {if (this.playRequest === attempt) this.playRequest = 0;});
   }
+
+  // Called synchronously in a real button handler to satisfy browser autoplay
+  // policy. It resumes this decoder; it never resets or seeks the song.
+  resumeFromGesture() {
+    if (!this.target || !this.ready || this.audio.error || this.audio.ended) return false;
+    this.target = {...this.target, status: 'playing'};
+    this.failedGeneration = -1;this.abortRetries = 0;this.playRequest = 0;this.playAttempt++;
+    this.clearRetry();
+    const generation = this.generation, attempt = ++this.playAttempt;
+    this.playRequest = attempt;
+    try {
+      void Promise.resolve(this.audio.play()).catch(error => {
+        if (generation === this.generation && attempt === this.playAttempt) this.reportFailure(error);
+      }).finally(() => {if (this.playRequest === attempt) this.playRequest = 0;});
+    } catch (error) {this.playRequest = 0;this.reportFailure(error);}
+    return true;
+  }
+  handleMediaError() {
+    // Old-source events can arrive after a new target was selected. The media
+    // element clears error on load; a bare/stale error event is not a failure.
+    const error = this.audio.error;
+    if (!this.target || !this.resolvedSource || !error || (this.audio.currentSrc || this.audio.src) !== this.resolvedSource) return;
+    this.reportFailure(Object.assign(Error('The browser could not decode this audio.'), {name: 'MediaPlaybackError', mediaCode: error.code}));
+  }
+  private reportFailure(error: unknown) {
+    if (this.failedGeneration === this.generation) return;
+    this.failedGeneration = this.generation;this.loading(false);this.failed(error);
+  }
+  private clearRetry() {if (this.retry) clearTimeout(this.retry);this.retry = null;}
 
   private clearMetadata() {
     if (this.metadata) this.audio.removeEventListener('loadedmetadata', this.metadata);
@@ -85,6 +141,7 @@ export class SpeakerPlayback {
   stop() {
     if (this.target) this.stoppedPosition = {key: this.target.key, position: this.position};
     this.generation++;
+    this.playAttempt++;this.playRequest = 0;this.clearRetry();this.resolvedSource = '';
     this.target = null;
     this.loaded = false;
     this.clearMetadata();
@@ -115,15 +172,26 @@ export class SpeakerAudioCache {
     if (pending) return pending.promise;
     const controller = new AbortController();
     const promise = (async () => {
-      const response = await this.fetcher(source, {signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)])});
-      if (!response.ok || !(response.headers.get('content-type') || '').startsWith('audio/')) throw Error('The complete song could not be loaded. Check the connection and press Resume speaker.');
-      const blob = await response.blob();
-      const expected = Number(response.headers.get('content-length'));
-      if (!blob.size || (expected > 0 && blob.size !== expected)) throw Error('The song download was incomplete. Press Resume speaker to retry.');
-      if (controller.signal.aborted || this.disposed) throw Error('Audio download cancelled.');
-      const url = this.createURL(blob);
-      this.files.set(source, url);
-      return url;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          // A preview may have populated the browser's byte-range HTTP cache.
+          // Fetch the full file independently; 206 is never a complete song.
+          const response = await this.fetcher(source, {cache: 'no-store', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)])});
+          if (!response.ok || response.status === 206 || response.headers.has('content-range') || !(response.headers.get('content-type') || '').startsWith('audio/')) {
+            void response.body?.cancel().catch(() => {});
+            throw Object.assign(Error(`The complete audio download failed (HTTP ${response.status}). Resume speaker will retry.`), {name: 'AudioDownloadError'});
+          }
+          const blob = await response.blob();
+          const expected = Number(response.headers.get('content-length'));
+          if (!blob.size || (expected > 0 && blob.size !== expected)) throw Object.assign(Error('The audio download was incomplete. Resume speaker will retry.'), {name: 'AudioDownloadError'});
+          if (controller.signal.aborted || this.disposed) throw Error('Audio download cancelled.');
+          const url = this.createURL(blob);
+          this.files.set(source, url);
+          return url;
+        } catch (error) {
+          if (controller.signal.aborted || this.disposed || attempt >= 1) throw error;
+        }
+      }
     })().finally(() => {if (this.pending.get(source)?.controller === controller) this.pending.delete(source);});
     this.pending.set(source, {promise, controller});
     return promise;

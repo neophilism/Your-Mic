@@ -36,6 +36,7 @@ const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibil
   if(flux){
     assert.equal(url.origin,'https://api.deepgram.com');assert.equal(url.pathname,'/v2/speak');
     assert.equal(url.searchParams.get('model'),'flux-miles-en');assert.equal(url.searchParams.get('encoding'),'mp3');
+    assert.equal(url.searchParams.get('expressivity'),'2');
     assert.equal(request.headers.get('authorization'),'Token test-only-deepgram-key');assert.equal(typeof body.text,'string');
     assert(!('speaker' in body));
   }else{assert.equal(url.hostname,'api.cloudflare.com');assert(request.url.endsWith('/ai/run/@cf/deepgram/aura-2-en'));assert.equal(body.speaker,'zeus');assert.equal(body.encoding,'mp3');}

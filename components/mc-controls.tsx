@@ -50,7 +50,7 @@ export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: an
   useEffect(() => {if (playing) audio.current?.pause();}, [playing]);
   return <details className="mc-controls">
     <summary><span><Mic size={16}/> AI MC</span><span>{event.mc_enabled ? 'Track clips on' : 'Track clips off'}</span></summary>
-    <p className="mc-description">Voice: {snapshot.mcVoice || 'Zeus'}{!snapshot.milesReady && ' · Miles setup pending'}</p>
+    <p className="mc-description">Voice: {snapshot.mcVoice || 'Zeus'}{snapshot.mcExpressivity===2&&' · Maximum energy'}{!snapshot.milesReady && ' · Miles setup pending'}</p>
     <p className="mc-description">Each track has its own opening and closing clip. The next opening follows the actual playlist or queue selection; a closing credit never names the next song.</p>
     <div className="mc-checks">
       <label><input type="checkbox" checked={!!event.mc_enabled} onChange={e => saveSettings({enabled: e.target.checked})}/> Play track opening and closing clips</label>

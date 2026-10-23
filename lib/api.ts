@@ -30,7 +30,7 @@ async function snapshot(id:string,r:Request){
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
   const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
-  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&e.controller_until>Date.now()};
+  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,mcVoiceKey:speechProfile(env).key,mcExpressivity:speechProfile(env).expressivity,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&e.controller_until>Date.now()};
 }
 async function splitTransition(e:any,b:any,r:Request,now:number){
   if(Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
@@ -110,6 +110,7 @@ async function control(e:any,b:any,r:Request){
     if(!result.meta.changes)fail(409,'Playback changed.');return json(await snapshot(e.id,r));
   }
   if(b.action==='pause'){
+    if(b.playbackId&&b.playbackId!==e.playback_id)fail(409,'That audio already changed. Refreshing speaker state.');
     const result=await run("UPDATE events SET status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=?",reportedPosition??playbackPosition(e,now),e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
   } else if(b.action==='play'&&(e.current_track||e.announcement_id)){
     const result=await run("UPDATE events SET status='playing',started_at=?,controller_until=?,version=version+1 WHERE id=? AND version=?",now,now+45000,e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');

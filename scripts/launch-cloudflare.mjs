@@ -2,6 +2,8 @@ import {readFile,writeFile,appendFile} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {deploymentCredentials,provisionCloudflare,cloudflareApi} from './cloudflare-resources.mjs';
+import {MILES_EXPRESSIVITY,milesSpeechUrl} from '../lib/miles.mjs';
+import {verifyHostedAudio,verifyDecodedAudio} from './verify-audio.mjs';
 
 const credentials=deploymentCredentials(process.env);
 const resources=await provisionCloudflare(credentials);
@@ -49,13 +51,15 @@ if(!me.ok||(await me.json()).signedIn!==true)throw Error('The deployed artist se
 if(process.env.DEEPGRAM_API_KEY?.trim()){
   // Verify the real credential/model without logging the key or saving test
   // audio into a live event. This is one short, synthetic synthesis request.
-  const speech=await fetch('https://api.deepgram.com/v2/speak?model=flux-miles-en&encoding=mp3',{
+  const speech=await fetch(milesSpeechUrl(),{
     method:'POST',headers:{Authorization:`Token ${process.env.DEEPGRAM_API_KEY.trim()}`,'Content-Type':'application/json'},
     body:JSON.stringify({text:'Your Mic sound check.'}),signal:AbortSignal.timeout(30000),
   });
   if(!speech.ok||!(speech.headers.get('content-type')||'').startsWith('audio/'))throw Error(`Miles synthesis check failed (HTTP ${speech.status}). Check the Deepgram key permissions and available credits.`);
   const bytes=await speech.arrayBuffer();if(bytes.byteLength<32)throw Error('Miles synthesis returned no playable audio.');
-  console.log(`Miles synthesis check passed (${bytes.byteLength} audio bytes).`);
+  verifyDecodedAudio(bytes);
+  console.log(`Miles synthesis check passed (expressivity ${MILES_EXPRESSIVITY}, ${bytes.byteLength} audio bytes).`);
 }
+await verifyHostedAudio(resources.url,cookie);
 console.log(`Your Mic is live and its health and artist sign-in checks passed: ${resources.url}`);
 if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,`## Your Mic deployed\n\n[Open Your Mic](${resources.url}) · [Artist studio](${resources.url}/admin)\n\nHealth and artist-session checks passed. Create/upload the event and rehearse with phones and the speaker before sharing its new QR code.\n`);

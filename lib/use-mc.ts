@@ -10,7 +10,7 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
   const cache = useRef(new Map<string, ReadyMc>()), recordings = useRef(new Map<string, ReadyMc>()), inFlight = useRef(new Map<string, Promise<any>>());
   const retired = useRef(new Set<string>()), order = useRef(0);
   const [status, setStatus] = useState(''), [revision, setRevision] = useState(0);
-  const eventId = snapshot?.event.id || '', voice = snapshot?.mcVoice || 'Zeus';
+  const eventId = snapshot?.event.id || '', voice = snapshot?.mcVoiceKey || snapshot?.mcVoice || 'Zeus';
   const identity = useRef('');identity.current = `${eventId}:${voice}`;
   const prepare = useCallback(async (kind: McKind = 'track-end', trackId?: string, force = false, entryId?: string) => {
     const s = current.current;if (!s?.isOwner) return null;
@@ -30,8 +30,8 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
         if (clip.state !== 'ready') {setStatus(clip.message || 'Preparing track clips. Music continues if a recording is unavailable.');return null;}
         if (cache.current.get(clip.context)?.id === clip.id) return cache.current.get(clip.context)!;
         // Fully download during a song, never request TTS at a music boundary.
-        const response = await fetch(clip.audioUrl, {signal: AbortSignal.timeout(15000)});
-        if (!response.ok || !(response.headers.get('content-type') || '').startsWith('audio/')) throw Error('Could not load announcement');
+        const response = await fetch(clip.audioUrl, {cache: 'no-store', signal: AbortSignal.timeout(15000)});
+        if (!response.ok || response.status === 206 || response.headers.has('content-range') || !(response.headers.get('content-type') || '').startsWith('audio/')) throw Error('Could not load complete announcement');
         const blob = await response.blob(), expected = Number(response.headers.get('content-length'));
         if (!blob.size || expected > 0 && blob.size !== expected) throw Error('Incomplete announcement');
         const url = URL.createObjectURL(blob);

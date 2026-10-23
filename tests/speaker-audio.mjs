@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {SpeakerPlayback,SpeakerAudioCache} from '../lib/speaker-audio.ts';
+import {SpeakerPlayback,SpeakerAudioCache,currentSpeakerFailure,speakerFailureMessage} from '../lib/speaker-audio.ts';
 const flush=()=>new Promise(resolve=>setTimeout(resolve,0));
 class Audio extends EventTarget {
  src='';paused=true;ended=false;readyState=0;duration=240;time=0;seeks=[];loads=0;plays=0;
@@ -56,7 +56,7 @@ test('audio cache publishes only complete files and reuses them without network 
 });
 test('truncated audio and unsuccessful responses are rejected before the speaker starts',async()=>{
  for(const response of [new Response('no',{status:503}),new Response(new Uint8Array(2),{headers:{'Content-Type':'audio/mpeg','Content-Length':'4'}})]){
-  const cache=new SpeakerAudioCache(async()=>response,()=>assert.fail('Must not publish partial audio'));
+  const cache=new SpeakerAudioCache(async()=>new Response(response.status===503?'no':new Uint8Array(2),{status:response.status,headers:response.headers}),()=>assert.fail('Must not publish partial audio'));
   await assert.rejects(cache.get('/song'),/complete|incomplete/);cache.dispose();
  }
 });
@@ -78,4 +78,54 @@ test('a ready cached announcement can replace a pending URL without applying a l
  pending.get('/mc/clip')('blob:late');await flush();
  assert.equal(audio.src,'blob:ready-clip');assert.equal(audio.currentTime,0);assert.equal(audio.loads,1);
  player.sync(track({source:'/mc/clip',position:90}));assert.equal(audio.loads,1);assert.equal(player.source,'blob:ready-clip');
+});
+
+test('play waits for metadata and cannot race the browser source reset',async()=>{
+ class SlowMetadata extends Audio {load(){this.loads++;this.readyState=0;this.ended=false;this.time=0;}}
+ const audio=new SlowMetadata(),player=new SpeakerPlayback(audio,async()=> 'blob:song',()=>{},assert.fail);
+ player.sync(track());await flush();for(let i=0;i<8;i++)player.sync(track({position:80+i}));
+ assert.equal(audio.plays,0);audio.readyState=4;audio.dispatchEvent(new Event('loadedmetadata'));await flush();
+ assert.equal(audio.plays,1);assert.equal(audio.currentTime,0);assert.equal(audio.loads,1);
+});
+test('an old aborted play promise cannot pause a newer resume of the same song',async()=>{
+ class DeferredAudio extends Audio {pending=[];play(){this.plays++;this.paused=false;return new Promise((resolve,reject)=>this.pending.push({resolve,reject}));}}
+ const audio=new DeferredAudio(),errors=[],player=new SpeakerPlayback(audio,async()=> 'blob:song',()=>{},e=>errors.push(e));
+ player.sync(track());await flush();audio.time=32;
+ player.sync(track({status:'paused'}));player.sync(track());await flush();assert.equal(audio.pending.length,2);
+ audio.pending[1].resolve();audio.pending[0].reject(new DOMException('Paused old request','AbortError'));await flush();
+ assert.deepEqual(errors,[]);assert.equal(audio.paused,false);assert.equal(audio.currentTime,32);assert.equal(audio.loads,1);
+});
+test('a transient browser AbortError retries play without reloading or seeking',async()=>{
+ const audio=new Audio(),errors=[];audio.play=function(){this.plays++;if(this.plays===1)return Promise.reject(new DOMException('Interrupted start','AbortError'));this.paused=false;return Promise.resolve();};
+ const player=new SpeakerPlayback(audio,async()=> 'blob:song',()=>{},e=>errors.push(e));
+ player.sync(track());await new Promise(r=>setTimeout(r,90));
+ assert.equal(audio.plays,2);assert.equal(audio.paused,false);assert.equal(audio.loads,1);assert.deepEqual(audio.seeks,[]);assert.deepEqual(errors,[]);
+});
+test('a stale outgoing announcement failure cannot pause the newly selected music',async()=>{
+ let reject,server={playback_id:'mc'},pauses=0;const audio=new Audio();
+ audio.play=function(){this.plays++;return new Promise((_resolve,r)=>{reject=r;});};
+ let player;player=new SpeakerPlayback(audio,async()=> 'blob:mc',()=>{},()=>{if(currentSpeakerFailure(player.key,server))pauses++;});
+ player.sync(track({key:'mc',source:'mc'}));await flush();
+ // Accepting a server response updates the logical transport before React's
+ // audio effect runs. The old browser promise may settle in that interval.
+ server={playback_id:'music'};reject(Error('Late outgoing announcement failure'));await flush();assert.equal(pauses,0);
+ player.stop();
+});
+test('stale native error events are ignored; a current decoder error is reported once',async()=>{
+ const audio=new Audio(),errors=[],player=new SpeakerPlayback(audio,async()=> 'blob:song',()=>{},e=>errors.push(e));
+ player.sync(track());await flush();audio.error=null;player.handleMediaError();assert.equal(errors.length,0);
+ audio.currentSrc='blob:outgoing';audio.error={code:4};player.handleMediaError();assert.equal(errors.length,0);
+ audio.currentSrc='blob:song';player.handleMediaError();player.handleMediaError();assert.equal(errors.length,1);assert.equal(errors[0].mediaCode,4);
+ assert.match(speakerFailureMessage(errors[0]),/decode/);
+});
+test('Resume makes the play call inside the user gesture and preserves the playhead',async()=>{
+ const audio=new Audio(),player=new SpeakerPlayback(audio,async()=> 'blob:song',()=>{},()=>{});
+ player.sync(track({status:'paused'}));await flush();audio.time=43;
+ assert.equal(player.resumeFromGesture(),true);assert.equal(audio.plays,1,'play must run before the handler returns');await flush();
+ assert.equal(audio.currentTime,43);assert.equal(audio.loads,1);assert.deepEqual(audio.seeks,[]);
+});
+test('full-file fetch bypasses range caches and retries a partial response without publishing it',async()=>{
+ const requests=[],published=[];
+ const cache=new SpeakerAudioCache(async(_source,options)=>{requests.push(options);return new Response(new Uint8Array(4),{status:requests.length===1?206:200,headers:{'Content-Type':'audio/mpeg','Content-Length':'4',...(requests.length===1?{'Content-Range':'bytes 0-3/100'}:{})}});},blob=>{published.push(blob);return 'blob:full';});
+ assert.equal(await cache.get('/song'),'blob:full');assert.equal(requests.length,2);assert(requests.every(x=>x.cache==='no-store'));assert.equal(published.length,1);cache.dispose();
 });

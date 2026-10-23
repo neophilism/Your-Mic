@@ -1,6 +1,7 @@
+import {MILES_MODEL} from './miles.mjs';
 export const MC_MODEL = '@cf/deepgram/aura-2-en';
 export const MC_VOICE = 'zeus';
-export const MC_MILES_MODEL = 'flux-miles-en';
+export const MC_MILES_MODEL = MILES_MODEL;
 export const MC_TEXT_LIMIT = 600;
 
 export type McKind = 'between' | 'intro' | 'outro' | 'track-start' | 'track-end';
