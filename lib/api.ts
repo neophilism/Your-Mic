@@ -1,0 +1,168 @@
+import { env } from 'cloudflare:workers';
+import QRCode from 'qrcode/lib/core/qrcode.js';
+import SVG from 'qrcode/lib/renderer/svg-tag.js';
+import {nextSelection,playbackPosition,parseRange} from './playback';
+const consent='Notify me by email when this album is available on streaming platforms.';
+const json=(v:any,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+const fail=(s:number,m:string):never=>{throw Object.assign(new Error(m),{status:s});};
+const text=(v:any,max=120)=>String(v??'').trim().slice(0,max);
+async function hash(v:string){const a=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v));return Array.from(new Uint8Array(a),x=>x.toString(16).padStart(2,'0')).join('');}
+const db=()=>{if(!env.DB)fail(503,'Storage is not ready. Try again shortly.');return env.DB!;};
+const bucket=()=>{if(!env.BUCKET)fail(503,'Audio storage is not ready.');return env.BUCKET!;};
+async function first(sql:string,...p:any[]){return db().prepare(sql).bind(...p).first<any>();}
+async function all(sql:string,...p:any[]){return (await db().prepare(sql).bind(...p).all<any>()).results;}
+async function run(sql:string,...p:any[]){return db().prepare(sql).bind(...p).run();}
+function uid(r:Request){return r.headers.get('oai-authenticated-user-id');}
+function auth(r:Request){const id=uid(r);if(!id)fail(401,'Sign in as the artist to continue.');return id!;}
+async function eventFor(id:string,r?:Request){const e=await first('SELECT * FROM events WHERE id=?',id);if(!e)fail(404,'This event could not be found.');if(r&&e.owner_id!==auth(r))fail(403,'Only this event’s artist can change it.');return e;}
+function originCheck(r:Request){const o=r.headers.get('origin');if(o&&o!==new URL(r.url).origin)fail(403,'Please use this app directly.');if(r.headers.get('sec-fetch-site')==='cross-site')fail(403,'Please use this app directly.');}
+async function body(r:Request){if(Number(r.headers.get('content-length')||0)>16000)fail(413,'That request is too large.');try{return await r.json() as any;}catch{fail(400,'Please check the form and try again.');}}
+async function guest(r:Request){const token=r.headers.get('x-guest-token')||'';if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Refresh the page to set up your queue pass.');return hash(token);}
+async function snapshot(id:string,r:Request){
+  const e=await eventFor(id);const own=uid(r)===e.owner_id;
+  const token=r.headers.get('x-guest-token');const gh=token?await hash(token):'';
+  const tracks=await all('SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat FROM tracks WHERE event_id=? ORDER BY position,id',id);
+  const queue=await all("SELECT id,track_id,name,status,created_at,guest_hash FROM entries WHERE event_id=? AND status IN ('waiting','playing') ORDER BY created_at,id",id);
+  const {owner_id,controller_hash,...event}=e;
+  const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
+  return {event,tracks,lastTurn,queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),speakerHere:own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'')&&e.controller_until>Date.now()};
+}
+async function control(e:any,b:any,r:Request){
+  const token=text(b.controller,80); if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Reconnect this speaker device.');
+  const ch=await hash(token);const now=Date.now();
+  if(b.action==='claim'){
+    if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now&&!b.force)fail(409,'Another device controls the speaker. Use “Take over speaker” if you intend to switch devices.');
+    // A new controller starts paused, so two devices never intentionally play at once.
+    const switching=e.controller_hash!==ch;
+    await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=?',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,playbackPosition(e,now),e.status==='playing'&&!switching?now:null,e.id,e.version);
+    return json(await snapshot(e.id,r));
+  }
+  if(e.controller_hash!==ch||e.controller_until<now)fail(409,'Connect this device to the speaker first.');
+  if(b.action==='heartbeat'){await run('UPDATE events SET controller_until=? WHERE id=? AND controller_hash=?',now+45000,e.id,ch);return json({ok:true});}
+  if(!['play','pause','next','select'].includes(b.action))fail(400,'Unknown playback action.');
+  if(b.action==='pause'){
+    const result=await run("UPDATE events SET status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=?",playbackPosition(e,now),e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
+  } else if(b.action==='play'&&e.current_track){
+    const result=await run("UPDATE events SET status='playing',started_at=?,controller_until=?,version=version+1 WHERE id=? AND version=?",now,now+45000,e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
+  } else {
+    if(b.action==='next'&&Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
+    const ts=await all('SELECT * FROM tracks WHERE event_id=? ORDER BY position,id',e.id);
+    const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",e.id);
+    let pick=nextSelection(e,ts,qs);
+    if(b.action==='select'){
+      const t=ts.find(t=>t.id===b.trackId);if(!t)fail(404,'Track not found.');
+      pick={mode:e.mode==='auto'?'auto':'album',entry:null,track:t,cursor:t.id};
+    }
+    const newVersion=e.version+1;
+    const update=db().prepare('UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=? WHERE id=? AND version=?').bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track?now:null,now+45000,newVersion,e.id,e.version);
+    const statements=[update];
+    if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS NOT ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
+    if(pick.entry)statements.push(db().prepare("UPDATE entries SET status='playing' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry=?)").bind(pick.entry.id,e.id,newVersion,pick.entry.id));
+    const result=await db().batch(statements);if(!result[0].meta.changes)fail(409,'Playback changed. Refreshing the queue.');
+  }
+  return json(await snapshot(e.id,r));
+}
+export async function api(r:Request){try{
+  const u=new URL(r.url);const p=u.pathname.split('/').filter(Boolean).slice(1);const method=r.method;
+  if(method!=='GET'&&method!=='HEAD')originCheck(r);
+  if(p[0]==='me')return json({signedIn:!!uid(r),name:r.headers.get('oai-authenticated-user-email')||''});
+  if(p[0]==='events'&&p.length===1){
+    if(method==='GET')return json({events:await all('SELECT id,title,artist,album,location,created_at,queue_open FROM events ORDER BY created_at DESC LIMIT 30')});
+    if(method==='POST'){
+      const owner=auth(r);const b=await body(r);if(!text(b.title)||!text(b.artist))fail(400,'Add an event name and artist.');
+      if((await first('SELECT COUNT(*) AS n FROM events WHERE owner_id=?',owner)).n>=50)fail(400,'You have reached the 50-event limit.');
+      const id=crypto.randomUUID();await run('INSERT INTO events(id,owner_id,title,artist,album,location,created_at) VALUES(?,?,?,?,?,?,?)',id,owner,text(b.title),text(b.artist),text(b.album),text(b.location),Date.now());return json({id},201);
+    }
+  }
+  if(p[0]==='mine'){const owner=auth(r);return json({events:await all('SELECT id,title,artist,album,location,created_at FROM events WHERE owner_id=? ORDER BY created_at DESC',owner)});}
+  if(p[0]==='audio'&&p[1]){
+    const t=await first('SELECT * FROM tracks WHERE id=?',p[1]);if(!t)fail(404,'Audio not found.');
+    const isBeat=u.searchParams.get('beat')==='1'&&t.beat_key;const key=isBeat?t.beat_key:t.audio_key;
+    const meta=await bucket().head(key);if(!meta)fail(404,'This audio is unavailable. Please tell the artist.');
+    let range=null;try{range=parseRange(r.headers.get('range'),meta!.size);}catch{return new Response(null,{status:416,headers:{'Content-Range':`bytes */${meta!.size}`}});}
+    const h=new Headers({'Content-Type':(isBeat?t.beat_mime:t.mime)||'audio/mpeg','Accept-Ranges':'bytes','Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff','ETag':meta!.httpEtag,'Content-Length':String(range?.length||meta!.size)});
+    if(range)h.set('Content-Range',`bytes ${range.offset}-${range.offset+range.length-1}/${meta!.size}`);
+    if(method==='HEAD')return new Response(null,{status:range?206:200,headers:h});
+    const object=await bucket().get(key,range?{range}:undefined);if(!object)fail(404,'Audio not found.');return new Response(object!.body,{status:range?206:200,headers:h});
+  }
+  if(p[0]!=='events'||!p[1])fail(404,'Not found.');
+  const id=p[1];
+  if(p.length===2&&method==='GET')return json(await snapshot(id,r));
+  if(p[2]==='qr'&&method==='GET'){
+    await eventFor(id);const link=`${u.origin}/?event=${encodeURIComponent(id)}`;
+    const svg=SVG.render(QRCode.create(link,{errorCorrectionLevel:'M'}),{margin:3,width:600,color:{dark:'#10130f',light:'#ffffff'}});
+    return new Response(svg,{headers:{'Content-Type':'image/svg+xml','Cache-Control':'public, max-age=3600','Content-Disposition':'inline; filename="your-mic-qr.svg"'}});
+  }
+  if(p[2]==='subscribe'&&method==='POST'){
+    await eventFor(id);const b=await body(r);const email=text(b.email,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||b.consent!==true)fail(400,'Enter a valid email and agree to the release notification.');
+    if((await first('SELECT COUNT(*) AS n FROM subscribers WHERE event_id=?',id)).n>=15000)fail(429,'This list is full. Please ask the artist.');
+    await run('INSERT OR IGNORE INTO subscribers(id,event_id,email,created_at,consent) VALUES(?,?,?,?,?)',crypto.randomUUID(),id,email,Date.now(),consent);return json({ok:true});
+  }
+  if(p[2]==='queue'&&method==='POST'){
+    const e=await eventFor(id);if(!e.queue_open)fail(400,'The artist has closed the freestyle queue.');
+    const gh=await guest(r);const b=await body(r);if(!text(b.name,40))fail(400,'What should the artist call you?');
+    if(!await first('SELECT id FROM tracks WHERE id=? AND event_id=?',b.trackId,id))fail(404,'Choose a track from this event.');
+    const qid=crypto.randomUUID();
+    const result=await run("INSERT INTO entries(id,event_id,track_id,name,guest_hash,status,created_at) SELECT ?,?,?,?,?,'waiting',? WHERE NOT EXISTS(SELECT 1 FROM entries WHERE event_id=? AND guest_hash=? AND status IN ('waiting','playing')) AND (SELECT COUNT(*) FROM entries WHERE event_id=? AND status IN ('waiting','playing'))<500 AND EXISTS(SELECT 1 FROM events WHERE id=? AND queue_open=1)",qid,id,b.trackId,text(b.name,40),gh,Date.now(),id,gh,id,id);
+    if(!result.meta.changes)fail(409,'You are already queued, or this queue is full or closed.');return json(await snapshot(id,r),201);
+  }
+  if(p[2]==='queue'&&p[3]&&method==='DELETE'){
+    const e=await eventFor(id);const q=await first('SELECT * FROM entries WHERE id=? AND event_id=?',p[3],id);if(!q)fail(404,'Queue entry not found.');
+    if(uid(r)!==e.owner_id&&q.guest_hash!==await guest(r))fail(403,'You can only remove your own place.');
+    if(q.status==='playing')fail(400,'The artist can skip the current performer using “Next”.');
+    await run("UPDATE entries SET status='cancelled' WHERE id=? AND status='waiting'",q.id);return json(await snapshot(id,r));
+  }
+  const e=await eventFor(id,r);
+  if(p.length===2&&method==='PATCH'){
+    const b=await body(r);
+    if(b.action==='mode'){
+      if(!['album','mic','auto'].includes(b.mode))fail(400,'Choose album or Your Mic.');
+      const pending=!!e.current_track;
+      await run('UPDATE events SET pending_mode=?,mode=?,version=version+1 WHERE id=?',pending&&b.mode!==e.mode?b.mode:null,pending?e.mode:b.mode,id);
+    }else if(b.action==='schedule'){
+      if(b.trackId&&!await first('SELECT id FROM tracks WHERE id=? AND event_id=?',b.trackId,id))fail(404,'Track not found.');
+      await run('UPDATE events SET mic_after_track=?,version=version+1 WHERE id=?',b.trackId||null,id);
+    }else{
+      await run('UPDATE events SET title=?,artist=?,album=?,location=?,queue_open=?,version=version+1 WHERE id=?',text(b.title)||e.title,text(b.artist)||e.artist,text(b.album??e.album),text(b.location??e.location),b.queueOpen===undefined?e.queue_open:b.queueOpen?1:0,id);
+    }
+    return json(await snapshot(id,r));
+  }
+  if(p[2]==='control'&&method==='POST')return await control(e,await body(r),r);
+  if(p[2]==='subscribers'&&method==='GET'){
+    const rows=await all('SELECT email,created_at,consent FROM subscribers WHERE event_id=? ORDER BY created_at',id);
+    if(u.searchParams.get('format')!=='csv')return json({count:rows.length});
+    const cell=(v:any)=>'"'+(/^[=+\-@\t\r]/.test(String(v))?"'"+String(v):String(v)).replace(/"/g,'""')+'"';
+    const csv='Email,Signed up (UTC),Consent\r\n'+rows.map(x=>[x.email,new Date(x.created_at).toISOString(),x.consent].map(cell).join(',')).join('\r\n');
+    return new Response(csv,{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="your-mic-release-list.csv"','Cache-Control':'no-store'}});
+  }
+  if(p[2]==='tracks'&&method==='POST'){
+    const beat=p[3]&&p[4]==='beat';const existing=beat?await first('SELECT * FROM tracks WHERE id=? AND event_id=?',p[3],id):null;
+    if(beat&&!existing)fail(404,'Track not found.');
+    if((await first('SELECT COUNT(*) AS n FROM tracks WHERE event_id=?',id)).n>=100&&!beat)fail(400,'An event can contain up to 100 tracks.');
+    const size=Number(r.headers.get('x-audio-size')||r.headers.get('content-length')||0);if(!Number.isSafeInteger(size)||size<=0)fail(400,'The upload size is missing. Refresh and try again.');if(size>75*1024*1024)fail(413,'Use an audio file smaller than 75 MB. MP3 or M4A is best for an outdoor event.');
+    const filename=text(u.searchParams.get('filename'),200);const ext=filename.split('.').pop()?.toLowerCase()||'';
+    const types:Record<string,string>={mp3:'audio/mpeg',m4a:'audio/mp4',mp4:'audio/mp4',wav:'audio/wav',ogg:'audio/ogg',aac:'audio/aac',flac:'audio/flac',webm:'audio/webm'};
+    if(!types[ext]||!r.body)fail(400,'Choose an MP3, M4A, WAV, OGG, AAC, FLAC, or WebM audio file.');
+    const key=`events/${id}/${crypto.randomUUID()}.${ext}`;const duration=Math.min(7200,Math.max(0,Number(u.searchParams.get('duration'))||0));
+    const fixed=new FixedLengthStream(size);
+    await Promise.all([bucket().put(key,fixed.readable,{httpMetadata:{contentType:types[ext]}}),r.body!.pipeTo(fixed.writable)]);
+    try{
+      if(beat){await run('UPDATE tracks SET beat_key=?,beat_mime=?,beat_duration=? WHERE id=? AND event_id=?',key,types[ext],duration,existing.id,id);if(existing.beat_key)await bucket().delete(existing.beat_key);}
+      else{const tid=crypto.randomUUID();await run('INSERT INTO tracks(id,event_id,title,position,duration,audio_key,mime) SELECT ?,?,?,COALESCE(MAX(position),-1)+1,?,?,? FROM tracks WHERE event_id=?',tid,id,text(u.searchParams.get('title'))||filename.replace(/\.[^.]+$/,''),duration,key,types[ext],id);}
+    }catch(err){await bucket().delete(key);throw err;}
+    return json(await snapshot(id,r),201);
+  }
+  if(p[2]==='tracks'&&method==='PATCH'){
+    const b=await body(r);const ts=await all('SELECT id FROM tracks WHERE event_id=?',id);
+    if(b.order){if(!Array.isArray(b.order)||b.order.length!==ts.length||new Set(b.order).size!==ts.length||ts.some(t=>!b.order.includes(t.id)))fail(400,'Refresh the playlist before changing its order.');await db().batch(b.order.map((tid:string,i:number)=>db().prepare('UPDATE tracks SET position=? WHERE id=? AND event_id=?').bind(i,tid,id)));}
+    else if(p[3]&&text(b.title))await run('UPDATE tracks SET title=? WHERE id=? AND event_id=?',text(b.title),p[3],id);
+    return json(await snapshot(id,r));
+  }
+  if(p[2]==='tracks'&&p[3]&&method==='DELETE'){
+    const t=await first('SELECT * FROM tracks WHERE id=? AND event_id=?',p[3],id);if(!t)fail(404,'Track not found.');
+    if(e.current_track===t.id||await first("SELECT id FROM entries WHERE track_id=? AND status IN ('waiting','playing')",t.id))fail(400,'This track is playing or selected by a waiting performer.');
+    await db().batch([db().prepare('DELETE FROM entries WHERE track_id=?').bind(t.id),db().prepare('DELETE FROM tracks WHERE id=? AND event_id=?').bind(t.id,id)]);
+    await bucket().delete([t.audio_key,...(t.beat_key?[t.beat_key]:[])]);return json(await snapshot(id,r));
+  }
+  fail(404,'Not found.');
+}catch(error:any){if(!error.status)console.error('Your Mic API error',error);return json({error:error.status?error.message:'Something went wrong. Please try again.'},error.status||500);}}

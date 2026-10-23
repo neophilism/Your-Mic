@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {nextSelection,playbackPosition,parseRange} from '../lib/playback.ts';
+const tracks=[{id:'a'},{id:'b'},{id:'c'}];
+const base={mode:'album',pending_mode:null,mic_after_track:null,album_cursor:'a',current_track:'a'};
+const queue=[{id:'q1',track_id:'c',status:'waiting'},{id:'q2',track_id:'a',status:'waiting'}];
+test('playlist ignores waiting performers and loops',()=>{assert.equal(nextSelection(base,tracks,queue).track.id,'b');assert.equal(nextSelection({...base,album_cursor:'c'},tracks,queue).track.id,'a');});
+test('Your Mic waits when the queue is empty',()=>assert.equal(nextSelection({...base,mode:'mic'},tracks,[]).track,null));
+test('Automatic gives queued performers priority in arrival order',()=>{const first=nextSelection({...base,mode:'auto'},tracks,queue);assert.equal(first.entry.id,'q1');assert.equal(first.track.id,'c');assert.equal(first.cursor,'a');const second=nextSelection({...base,mode:'auto',album_cursor:first.cursor},tracks,queue.slice(1));assert.equal(second.entry.id,'q2');});
+test('Automatic resumes next album track and repeats after the last',()=>{assert.equal(nextSelection({...base,mode:'auto'},tracks,[]).track.id,'b');assert.equal(nextSelection({...base,mode:'auto',album_cursor:'c'},tracks,[]).track.id,'a');});
+test('mode changes apply at boundaries and scheduled mic works',()=>{assert.equal(nextSelection({...base,pending_mode:'auto'},tracks,queue).mode,'auto');assert.equal(nextSelection({...base,mic_after_track:'a'},tracks,queue).entry.id,'q1');assert.equal(nextSelection({...base,mic_after_track:'a',pending_mode:'album'},tracks,queue).mode,'album');});
+test('empty set is safe in every mode',()=>{for(const mode of ['album','mic','auto'])assert.equal(nextSelection({...base,mode},[],[]).track,null);});
+test('position freezes when paused',()=>{assert.equal(playbackPosition({status:'playing',position:5,started_at:1000},4000),8);assert.equal(playbackPosition({status:'paused',position:5,started_at:1000},4000),5);});
+test('audio seeking supports regular, open and suffix byte ranges',()=>{assert.deepEqual(parseRange('bytes=20-39',100),{offset:20,length:20});assert.deepEqual(parseRange('bytes=90-',100),{offset:90,length:10});assert.deepEqual(parseRange('bytes=-10',100),{offset:90,length:10});assert.deepEqual(parseRange('bytes=-1000',100),{offset:0,length:100});for(const v of ['bytes=100-','bytes=40-20','bytes=-0','bytes=0-1,5-6'])assert.throws(()=>parseRange(v,100));});
