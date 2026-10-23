@@ -40,6 +40,7 @@ const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibil
     assert.equal(request.headers.get('authorization'),'Token test-only-deepgram-key');assert.equal(typeof body.text,'string');
     assert(!('speaker' in body));
   }else{assert.equal(url.hostname,'api.cloudflare.com');assert(request.url.endsWith('/ai/run/@cf/deepgram/aura-2-en'));assert.equal(body.speaker,'zeus');assert.equal(body.encoding,'mp3');}
+  assert(!/[67]\. Track [AB]/.test(body.text),'Filename track numbers must not reach the speech provider');
   calls++;
   return failSpeech?new Response('unavailable',{status:503}):new Response(wav,{headers:{'Content-Type':'audio/mpeg'}});
 }});
@@ -49,7 +50,7 @@ try{
  const owner={'oai-authenticated-user-id':'artist'}, controller=randomUUID(), host={...owner,'x-controller-token':controller}, guest={'x-guest-token':randomUUID()};
  async function req(path,method='GET',body,headers=host,status=200){const response=await mf.dispatchFetch('https://mc.test/api/'+path,{method,headers:{'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json();assert.equal(response.status,status,JSON.stringify(data));return data;}
  const created=await req('events','POST',{title:'The Show',artist:'The Artist',album:'The Album'},host,201);const base='events/'+created.id;
- const now=Date.now();await DB.batch(['a','b'].map((id,index)=>DB.prepare('INSERT INTO tracks(id,event_id,title,position,duration,audio_key,mime) VALUES(?,?,?,?,?,?,?)').bind(id,created.id,'Track '+id.toUpperCase(),index,180,id+'.mp3','audio/mpeg')));
+ const now=Date.now();await DB.batch(['a','b'].map((id,index)=>DB.prepare('INSERT INTO tracks(id,event_id,title,position,duration,audio_key,mime) VALUES(?,?,?,?,?,?,?)').bind(id,created.id,(index+6)+'. Track '+id.toUpperCase(),index,180,id+'.mp3','audio/mpeg')));
  let s=await req(base);assert.equal(s.event.intro_enabled,0);assert.equal(s.event.outro_enabled,0);assert.equal(s.speechAvailable,true);assert.equal(s.mcVoice,flux?'Miles':'Zeus');assert.equal(s.milesReady,flux);
  await req(base+'/mc','PATCH',{trackId:'a',text:'Nope'},guest,401);
  await req(base+'/mc','POST',{},guest,401);

@@ -4,6 +4,11 @@ export const MC_VOICE = 'zeus';
 export const MC_MILES_MODEL = MILES_MODEL;
 export const MC_TEXT_LIMIT = 600;
 
+// Strip explicit filename track numbering only; preserve numbers in the name.
+export function spokenTrackTitle(title: string) {
+  return title.trim().replace(/^\d{1,3}\s*[.)]\s+(?=\S)/, '');
+}
+
 export type McKind = 'between' | 'intro' | 'outro' | 'track-start' | 'track-end';
 export type McPlan = {context: string; text: string; kind: McKind; nextTrackId: string | null; nextEntryId: string | null};
 
@@ -12,12 +17,13 @@ export type McPlan = {context: string; text: string; kind: McKind; nextTrackId: 
 export function mcTrackPlan(event: any, track: any, kind: 'track-start' | 'track-end', entry: any = null): McPlan | null {
   if (!track || event.mc_enabled === 0) return null;
   const variant = Math.abs(Number(track.position) || 0) % 3;
-  const credit = `${track.title}${event.album ? ` on ${event.album}` : ''} by ${event.artist}`;
+  const title = spokenTrackTitle(track.title);
+  const credit = `${title}${event.album ? ` on ${event.album}` : ''} by ${event.artist}`;
   const defaults = kind === 'track-end' ? [`That was ${credit}.`, `You just heard ${credit}.`, `That’s ${credit}.`] : [`Up next, ${credit}.`, `Coming up, ${credit}.`, `Next on the set, ${credit}.`];
-  const values: Record<string, string> = {track: track.title, album: event.album || '', artist: event.artist};
+  const values: Record<string, string> = {track: title, album: event.album || '', artist: event.artist};
   const custom = String(track[kind === 'track-start' ? 'mc_intro_text' : 'mc_text'] || '').replace(/\{(track|album|artist)\}/g, (_all, key) => values[key]).trim();
   const rapper = kind === 'track-start' ? entry : null;
-  return {context: JSON.stringify([event.id, kind, track.id, track.title, rapper?.id || null, rapper?.name || null]),
+  return {context: JSON.stringify([event.id, kind, track.id, title, rapper?.id || null, rapper?.name || null]),
     text: `${custom || defaults[variant]}${rapper ? ` ${rapper.name}, it’s your mic!` : ''}`, kind,
     nextTrackId: kind === 'track-start' ? track.id : null, nextEntryId: rapper?.id || null};
 }
@@ -38,15 +44,16 @@ export function mcPlan(event: any, tracks: any[], pick: any): McPlan | null {
   const previous = tracks.find(t => t.id === event.current_track);
   if (!previous || !pick.track || event.mc_enabled === 0) return null;
   const variant = Math.abs(Number(event.version) || 0) % 3;
-  const credit = `${previous.title}${event.album ? ` on ${event.album}` : ''} by ${event.artist}`;
+  const previousTitle = spokenTrackTitle(previous.title), nextTitle = spokenTrackTitle(pick.track.title);
+  const credit = `${previousTitle}${event.album ? ` on ${event.album}` : ''} by ${event.artist}`;
   const defaults = [`That was ${credit}.`, `You just heard ${credit}.`, `That’s ${credit}.`];
-  const values: Record<string, string> = {track: previous.title, album: event.album || '', artist: event.artist};
+  const values: Record<string, string> = {track: previousTitle, album: event.album || '', artist: event.artist};
   const custom = String(previous.mc_text || '').replace(/\{(track|album|artist)\}/g, (_all, key) => values[key]);
   const cue = pick.entry
-    ? `Playing next, ${pick.track.title}. ${pick.entry.name}, it’s your mic!`
-    : [`Up next, ${pick.track.title}.`, `Coming up, ${pick.track.title}.`, `Next on the set, ${pick.track.title}.`][variant];
+    ? `Playing next, ${nextTitle}. ${pick.entry.name}, it’s your mic!`
+    : [`Up next, ${nextTitle}.`, `Coming up, ${nextTitle}.`, `Next on the set, ${nextTitle}.`][variant];
   return {
-    context: JSON.stringify([event.id, previous.id, event.current_entry || null, pick.mode, pick.track.id, pick.track.title, pick.entry?.id || null, pick.entry?.name || null]),
+    context: JSON.stringify([event.id, previous.id, previousTitle, event.current_entry || null, pick.mode, pick.track.id, nextTitle, pick.entry?.id || null, pick.entry?.name || null]),
     text: `${custom.trim() || defaults[variant]} ${cue}`,
     kind: 'between',
     nextTrackId: pick.track.id,
