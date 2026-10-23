@@ -47,3 +47,7 @@ node --experimental-strip-types tests/load.mjs
 ```
 
 The integration suite runs the real API in an isolated Miniflare Worker with temporary D1 and R2. It covers event ownership, audio and beat uploads, seeking, QR generation, consent and subscriber export access, anonymous FIFO queueing, duplicate protection, all modes, mode boundaries, playlist resumption/repeat, completed turns, controller leases, stale advances and track ordering. Test data is never deployed.
+
+## AI MC
+
+The artist studio includes cached spoken interstitials, per-song custom text with automatic rapper callouts, optional opening/closing scripts, and an early-end control. See [deployment and show operation](DEPLOYMENT.md#ai-mc-announcements) for Cloudflare Workers AI setup and readiness/failure behavior.

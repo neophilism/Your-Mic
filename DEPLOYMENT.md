@@ -1,6 +1,6 @@
 # Your Mic deployment
 
-Recommended starting point: **Cloudflare Workers Paid + D1 + R2 Standard**, directly in your own Cloudflare account. The source already uses these runtimes and storage APIs. No Render service, separate Postgres server, Redis, music-generation API, or paid email service is needed for the live queue and playback.
+Recommended starting point: **Cloudflare Workers Paid + D1 + R2 Standard**, directly in your own Cloudflare account. The source already uses these runtimes and storage APIs. No Render service, separate Postgres server, Redis, music-generation API, or paid email service is needed for the live queue and playback. The AI MC uses Cloudflare Workers AI and caches generated speech in R2.
 
 ## Budget and audience
 
@@ -87,6 +87,24 @@ The cloud provisioning workflow is covered by mocked resource-reuse/permission-f
 8. Open the returned HTTPS URL, check `/healthz`, sign in at `/admin`, create an event, upload tracks/beats and get the **new host's** event QR code. Test an anonymous phone join and a full Playlist → Automatic → queued performance → playlist-resume cycle with the physical speaker. Confirm the release list export.
 
 The repository contains code, schema and deployment configuration. It does not contain the existing Sites database, audio, subscriber list, credentials or browser queue passes. A fresh Cloudflare deployment starts empty. Existing Sites data and live event links are not automatically migrated; create/upload the new event or perform a separately verified data migration before changing public links. No provider account or paid hosting is created by cloning this repo.
+
+## AI MC announcements
+
+The Cloudflare configuration includes an `AI` binding. The MC uses Deepgram Aura-2 English (`@cf/deepgram/aura-2-en`) with the **Zeus** voice: a deep American voice. Enable Workers AI access/billing in the same Cloudflare account if prompted. There is no separate Deepgram or OpenAI signup or key for the independent Worker. Current published Aura-2 pricing is $0.03 per 1,000 input characters; for example 50 newly generated 200-character announcements cost about **$0.30**, before other usage. Repeated identical recordings are cached. Check the provider dashboard for actual charges.
+
+In **Artist studio → Speaker control → AI MC**:
+
+- **Announce between songs** defaults on. Short rotating phrases credit the outgoing track, album and artist. The next song and the next rapper’s name are added automatically.
+- Choose **After: [song] → Custom text** to replace that song’s interstitial. Text saves after a brief typing pause and speech preparation begins immediately. `{track}`, `{album}`, and `{artist}` are supported; the automatic next-song/rapper callout is appended.
+- Opening and closing announcements are independent, optional, and off by default. Each supports automatic or custom wording. Use `{artist}`, `{album}`, and `{event}` in those scripts. A ready opening announcement plays when starting a set, without repeating on pause/resume.
+- Check **End show after this song** whenever you are ready to finish, even midway through the playlist. The app closes the queue, plays the optional ready outro, and stops; the playlist does not restart. Uncheck it before the boundary to keep going. In an idle, connected session, **End show now** is also available.
+- Speech is generated and downloaded while music plays. Late script edits retain an earlier ready recording for the same next track/performer. A changed queue never reuses a recording calling the wrong name. If no safe recording is ready, speech is skipped and the next track starts; synthesis never blocks a track boundary. Last-second queue changes or a provider/network failure can therefore omit that transition’s MC callout.
+- The next music file is warmed in the browser. This does not make internet audio fully offline or promise sample-accurate, gapless music playback. Use the real speaker device for rehearsal.
+- All MC controls, script saves and synthesis requests require artist ownership. The audience cannot generate billable speech or edit announcements. Draft scripts are not in public snapshots. Live announcement text is shown during the callout.
+
+The existing ChatGPT Sites host has no speech credentials or AI binding. Its editor remains usable and clearly shows that voice activates on Cloudflare; it does not claim to have generated speech. For an optional speech-enabled Sites rehearsal using the same Cloudflare account, set the production Sites environment values `MC_CLOUDFLARE_ACCOUNT_ID` and secret `MC_CLOUDFLARE_API_TOKEN` (a token with Workers AI access). Never put the token in source or a public form. A Cloudflare deployment uses its native binding instead.
+
+Provider documentation: [Aura-2 model and pricing](https://developers.cloudflare.com/workers-ai/models/aura-2-en/), [Workers AI bindings](https://developers.cloudflare.com/workers-ai/configuration/bindings/), [Deepgram voices](https://developers.deepgram.com/docs/tts-models).
 
 ## Event operation
 
