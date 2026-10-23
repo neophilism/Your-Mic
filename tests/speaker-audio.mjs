@@ -129,3 +129,10 @@ test('full-file fetch bypasses range caches and retries a partial response witho
  const cache=new SpeakerAudioCache(async(_source,options)=>{requests.push(options);return new Response(new Uint8Array(4),{status:requests.length===1?206:200,headers:{'Content-Type':'audio/mpeg','Content-Length':'4',...(requests.length===1?{'Content-Range':'bytes 0-3/100'}:{})}});},blob=>{published.push(blob);return 'blob:full';});
  assert.equal(await cache.get('/song'),'blob:full');assert.equal(requests.length,2);assert(requests.every(x=>x.cache==='no-store'));assert.equal(published.length,1);cache.dispose();
 });
+
+test('the default and injected native fetch keep the browser global receiver',async()=>{
+ const original=globalThis.fetch;let requests=0;
+ function nativeFetch(){if(this!==globalThis)throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");requests++;return Promise.resolve(new Response(new Uint8Array(4),{headers:{'Content-Type':'audio/wav','Content-Length':'4'}}));}
+ globalThis.fetch=nativeFetch;
+ try{for(const fetcher of [undefined,nativeFetch]){const cache=new SpeakerAudioCache(fetcher,()=> 'blob:complete',()=>{});try{assert.equal(await cache.get('/native-song'),'blob:complete');}finally{cache.dispose();}}assert.equal(requests,2);}finally{globalThis.fetch=original;}
+});

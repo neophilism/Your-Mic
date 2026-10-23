@@ -222,3 +222,15 @@ and read/decode the first uploaded song when ffmpeg is available. These checks
 are read-only and do not change the live show or its queue.
 
 Reference: https://developers.deepgram.com/docs/tts-expressivity .
+
+
+## Native browser downloader correction
+
+The speaker cache binds native `fetch` to `globalThis`. Calling it as a method
+of the cache without that binding throws a browser `TypeError` (Illegal
+invocation) before any song request reaches the network. MC clips use their
+own direct fetch, which explains why voice could play while songs failed.
+The receiver regression covers both default and supplied native fetch.
+Browser verification also exercises the real default downloader without a
+substitute fetch function. The dedicated **Resume speaker** action always
+retries/resumes; it cannot toggle to Pause when server state still says Playing.
