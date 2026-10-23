@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import QRCode from 'qrcode/lib/core/qrcode.js';
 import SVG from 'qrcode/lib/renderer/svg-tag.js';
 import {nextSelection,playbackPosition,parseRange} from './playback';
-import {mcPlan,mcSpecialPlan,MC_TEXT_LIMIT} from './mc';
+import {mcPlan,mcSpecialPlan,mcTrackPlan,MC_TEXT_LIMIT} from './mc';
 import {prepareMc,speechAvailable,speechProfile} from './mc-storage';
 const consent='Notify me by email when this album is available on streaming platforms.';
 const json=(v:any,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
@@ -23,7 +23,7 @@ async function guest(r:Request){const token=r.headers.get('x-guest-token')||'';i
 async function snapshot(id:string,r:Request){
   const e=await eventFor(id);const own=uid(r)===e.owner_id;
   const token=r.headers.get('x-guest-token');const gh=token?await hash(token):'';
-  const tracks=await all(`SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat${own?',mc_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
+  const tracks=await all(`SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat${own?',mc_text,mc_intro_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
   const queue=await all("SELECT id,track_id,name,status,created_at,guest_hash FROM entries WHERE event_id=? AND status IN ('waiting','playing') ORDER BY created_at,id",id);
   const {owner_id,controller_hash,intro_text,outro_text,...event}=e;
   if(own)Object.assign(event,{intro_text,outro_text});
@@ -31,6 +31,50 @@ async function snapshot(id:string,r:Request){
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
   const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
   return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&e.controller_until>Date.now()};
+}
+async function splitTransition(e:any,b:any,r:Request,now:number){
+  if(Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
+  if(b.action==='finish-announcement'&&(!e.announcement_id||b.announcementId!==e.announcement_id))fail(409,'This announcement already changed.');
+  const ts=await all('SELECT * FROM tracks WHERE event_id=? ORDER BY position,id',e.id);
+  const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",e.id);
+  const clipFor=async(id:any,plan:any)=>id&&plan?first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND context=? AND state='ready'",id,e.id,plan.context):null;
+  const opening=async(track:any,entry:any)=>await clipFor(b.openingClipId,mcTrackPlan(e,track,'track-start',entry))||await clipFor(b.genericOpeningClipId,mcTrackPlan(e,track,'track-start'))||await clipFor(b.trackOpeningClips?.[track?.id],mcTrackPlan(e,track,'track-start'));
+  // The outgoing credit plays before selecting a successor. A last-second
+  // queue arrival during this credit therefore takes priority at the next step.
+  if(!e.announcement_id&&e.current_track&&['next','end'].includes(b.action)){
+    const closing=await clipFor(b.closingClipId,mcTrackPlan(e,ts.find(t=>t.id===e.current_track),'track-end'));
+    if(closing){
+      const result=await run("UPDATE events SET announcement_id=?,announcement_kind='track-end',position=0,status='playing',started_at=?,playback_id=?,end_after_track=?,version=version+1 WHERE id=? AND version=?",closing.id,now,crypto.randomUUID(),b.action==='end'?1:e.end_after_track,e.id,e.version);
+      if(!result.meta.changes)fail(409,'Playback changed.');return json(await snapshot(e.id,r));
+    }
+  }
+  if(e.announcement_id&&e.announcement_kind!=='track-end'&&b.action!=='select'&&b.action!=='end'){
+    // Show intro -> this track's opening -> music. An opening/outro/legacy
+    // announcement finishes directly into its already selected music/idle.
+    const track=ts.find(t=>t.id===e.current_track);
+    const entry=e.current_entry?await first('SELECT * FROM entries WHERE id=? AND event_id=?',e.current_entry,e.id):null;
+    const clip=e.announcement_kind==='intro'?await opening(track,entry):null;
+    const result=await run('UPDATE events SET announcement_id=?,announcement_kind=?,status=?,position=0,started_at=?,playback_id=?,version=version+1 WHERE id=? AND version=?',clip?.id||null,clip?'track-start':null,track||clip?'playing':'idle',track||clip?now:null,crypto.randomUUID(),e.id,e.version);
+    if(!result.meta.changes)fail(409,'Playback changed.');return json(await snapshot(e.id,r));
+  }
+  let pick=nextSelection(e,ts,qs);
+  if(b.action==='select'){
+    const track=ts.find(t=>t.id===b.trackId);if(!track)fail(404,'Track not found.');
+    pick={mode:e.mode==='auto'?'auto':'album',entry:null,track,cursor:track.id};
+  }
+  const ending=b.action==='end'||!!e.end_after_track;
+  if(ending)pick={mode:pick.mode,entry:null,track:null,cursor:e.album_cursor};
+  const starting=b.action==='play'&&!e.current_track&&!e.intro_played;
+  const special=ending?(e.outro_enabled?mcSpecialPlan(e,'outro'):null):starting?(e.intro_enabled?mcSpecialPlan(e,'intro'):null):null;
+  const specialClip=await clipFor(ending?b.outroClipId:b.introClipId,special);
+  const clip=specialClip||(!ending?await opening(pick.track,pick.entry):null);
+  const kind=specialClip?special!.kind:clip?'track-start':null,newVersion=e.version+1;
+  const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=?,playback_id=? WHERE id=? AND version=? AND (? IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,kind,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,crypto.randomUUID(),e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
+  const statements=[update];
+  if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS NOT ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
+  if(pick.entry)statements.push(db().prepare('UPDATE entries SET status=\'playing\' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry=?)').bind(pick.entry.id,e.id,newVersion,pick.entry.id));
+  const result=await db().batch(statements);if(!result[0].meta.changes)fail(409,'Playback changed. Refreshing the queue.');
+  return json(await snapshot(e.id,r));
 }
 async function control(e:any,b:any,r:Request){
   const token=text(b.controller,80); if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Reconnect this speaker device.');
@@ -57,6 +101,9 @@ async function control(e:any,b:any,r:Request){
     return json({ok:true,controllerUntil:now+45000,serverNow:now});
   }
   if(!['play','pause','next','select','finish-announcement','end'].includes(b.action))fail(400,'Unknown playback action.');
+  // Existing open artist tabs retain their previous protocol until refreshed.
+  // Only the new client requests split, per-track announcement stages.
+  if(b.splitMc&&b.action!=='pause'&&!(b.action==='play'&&(e.current_track||e.announcement_id)))return splitTransition(e,b,r,now);
   if(b.action==='finish-announcement'||(b.action==='next'&&e.announcement_id)){
     if(!e.announcement_id||Number(b.version)!==e.version||b.action==='finish-announcement'&&b.announcementId!==e.announcement_id)fail(409,'This announcement already changed.');
     const result=await run("UPDATE events SET announcement_id=NULL,announcement_kind=NULL,status=?,position=0,started_at=?,playback_id=?,version=version+1 WHERE id=? AND version=?",e.current_track?'playing':'idle',e.current_track?now:null,crypto.randomUUID(),e.id,e.version);
@@ -154,7 +201,8 @@ export async function api(r:Request){try{
     if(b.trackId){
       if(typeof b.text!=='string'||b.text.length>MC_TEXT_LIMIT)fail(400,`Keep announcements under ${MC_TEXT_LIMIT} characters.`);
       if(!await first('SELECT id FROM tracks WHERE event_id=? AND id=?',id,b.trackId))fail(404,'Track not found.');
-      await db().batch([db().prepare('UPDATE tracks SET mc_text=? WHERE id=? AND event_id=?').bind(b.text.trim(),b.trackId,id),db().prepare('UPDATE events SET version=version+1 WHERE id=?').bind(id)]);
+      if(b.part!==undefined&&!['start','end'].includes(b.part))fail(400,'Choose the opening or closing track clip.');
+      await db().batch([db().prepare(`UPDATE tracks SET ${b.part==='start'?'mc_intro_text':'mc_text'}=? WHERE id=? AND event_id=?`).bind(b.text.trim(),b.trackId,id),db().prepare('UPDATE events SET version=version+1 WHERE id=?').bind(id)]);
     }else{
       for(const key of ['introText','outroText'])if(b[key]!==undefined&&(typeof b[key]!=='string'||b[key].length>MC_TEXT_LIMIT))fail(400,`Keep announcements under ${MC_TEXT_LIMIT} characters.`);
       const columns:Record<string,string>={enabled:'mc_enabled',introEnabled:'intro_enabled',introText:'intro_text',outroEnabled:'outro_enabled',outroText:'outro_text',endAfterTrack:'end_after_track'};const keys=Object.keys(columns).filter(key=>b[key]!==undefined);if(keys.length)await run(`UPDATE events SET ${keys.map(key=>columns[key]+'=?').join(',')},version=version+1 WHERE id=?`,...keys.map(key=>key.endsWith('Text')?b[key].trim():b[key]?1:0),id);
@@ -164,7 +212,12 @@ export async function api(r:Request){try{
   if(p[2]==='mc'&&method==='POST'){
     const b=await body(r);const ts=await all('SELECT * FROM tracks WHERE event_id=? ORDER BY position,id',id);
     let plan;
-    if(b.kind==='intro'||b.kind==='outro')plan=mcSpecialPlan(e,b.kind);
+    if(b.kind==='track-start'||b.kind==='track-end'){
+      const track=ts.find(t=>t.id===b.trackId);if(!track)fail(404,'Track not found.');
+      const entry=b.entryId?await first("SELECT * FROM entries WHERE id=? AND event_id=? AND track_id=? AND status IN ('waiting','playing')",b.entryId,id,track.id):null;
+      if(b.entryId&&!entry)fail(404,'Performer not found in this track’s queue.');
+      plan=mcTrackPlan(e,track,b.kind,entry);
+    }else if(b.kind==='intro'||b.kind==='outro')plan=mcSpecialPlan(e,b.kind);
     else{
       const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",id);
       let source=e;

@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `mc_intro_text` text DEFAULT '' NOT NULL;

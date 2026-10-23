@@ -29,6 +29,13 @@
       "when": 1792777056814,
       "tag": "0003_playback_continuity",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792779891698,
+      "tag": "0004_track_bookends",
+      "breakpoints": true
     }
   ]
 }

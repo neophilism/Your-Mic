@@ -3,7 +3,23 @@ export const MC_VOICE = 'zeus';
 export const MC_MILES_MODEL = 'flux-miles-en';
 export const MC_TEXT_LIMIT = 600;
 
-export type McPlan = {context: string; text: string; kind: 'between' | 'intro' | 'outro'; nextTrackId: string | null; nextEntryId: string | null};
+export type McKind = 'between' | 'intro' | 'outro' | 'track-start' | 'track-end';
+export type McPlan = {context: string; text: string; kind: McKind; nextTrackId: string | null; nextEntryId: string | null};
+
+// A track's closing credit never names its successor. Its opening recording is
+// independent of the preceding song, so queue changes cannot create a false cue.
+export function mcTrackPlan(event: any, track: any, kind: 'track-start' | 'track-end', entry: any = null): McPlan | null {
+  if (!track || event.mc_enabled === 0) return null;
+  const variant = Math.abs(Number(track.position) || 0) % 3;
+  const credit = `${track.title}${event.album ? ` on ${event.album}` : ''} by ${event.artist}`;
+  const defaults = kind === 'track-end' ? [`That was ${credit}.`, `You just heard ${credit}.`, `That’s ${credit}.`] : [`Up next, ${credit}.`, `Coming up, ${credit}.`, `Next on the set, ${credit}.`];
+  const values: Record<string, string> = {track: track.title, album: event.album || '', artist: event.artist};
+  const custom = String(track[kind === 'track-start' ? 'mc_intro_text' : 'mc_text'] || '').replace(/\{(track|album|artist)\}/g, (_all, key) => values[key]).trim();
+  const rapper = kind === 'track-start' ? entry : null;
+  return {context: JSON.stringify([event.id, kind, track.id, track.title, rapper?.id || null, rapper?.name || null]),
+    text: `${custom || defaults[variant]}${rapper ? ` ${rapper.name}, it’s your mic!` : ''}`, kind,
+    nextTrackId: kind === 'track-start' ? track.id : null, nextEntryId: rapper?.id || null};
+}
 
 export function mcSpecialPlan(event: any, kind: 'intro' | 'outro'): McPlan {
   const values: Record<string, string> = {artist: event.artist, album: event.album || event.title, event: event.title};

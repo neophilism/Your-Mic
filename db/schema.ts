@@ -16,6 +16,7 @@ export const events = sqliteTable('events', {
 export const tracks = sqliteTable('tracks', {
   id: text('id').primaryKey(), eventId: text('event_id').notNull().references(()=>events.id), title: text('title').notNull(),
   mcText: text('mc_text').notNull().default(''),
+  mcIntroText: text('mc_intro_text').notNull().default(''),
   position: integer('position').notNull(), duration: real('duration').notNull().default(0), beatDuration: real('beat_duration'),
   audioKey: text('audio_key').notNull(), beatKey: text('beat_key'), mime: text('mime').notNull(), beatMime: text('beat_mime'),
 },t=>[index('tracks_event').on(t.eventId,t.position)]);

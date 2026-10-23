@@ -94,11 +94,11 @@ The Cloudflare configuration includes an `AI` binding. The MC uses Deepgram Aura
 
 In **Artist studio → Speaker control → AI MC**:
 
-- **Announce between songs** defaults on. Short rotating phrases credit the outgoing track, album and artist. The next song and the next rapper’s name are added automatically.
+- **Play track opening and closing clips** defaults on. Each track owns a closing credit and an independent opening introduction. Closing credits never announce a successor. The actual selected track supplies its own opening; a prepared rapper-specific introduction adds their name.
 - Choose **After: [song] → Custom text** to replace that song’s interstitial. Text saves after a brief typing pause and speech preparation begins immediately. `{track}`, `{album}`, and `{artist}` are supported; the automatic next-song/rapper callout is appended.
 - Opening and closing announcements are independent, optional, and off by default. Each supports automatic or custom wording. Use `{artist}`, `{album}`, and `{event}` in those scripts. A ready opening announcement plays when starting a set, without repeating on pause/resume.
 - Check **End show after this song** whenever you are ready to finish, even midway through the playlist. The app closes the queue, plays the optional ready outro, and stops; the playlist does not restart. Uncheck it before the boundary to keep going. In an idle, connected session, **End show now** is also available.
-- Speech is generated and downloaded while music plays. Late script edits retain an earlier ready recording for the same next track/performer. A changed queue never reuses a recording calling the wrong name. If no safe recording is ready, speech is skipped and the next track starts; synthesis never blocks a track boundary. Last-second queue changes or a provider/network failure can therefore omit that transition’s MC callout.
+- Speech is generated and downloaded while music plays. Late script edits retain an earlier ready recording for that same track and clip side. Opening and closing scripts can be edited independently with Before/After selections. A changed queue never reuses a recording calling the wrong name. If no safe recording is ready, speech is skipped and the next track starts; synthesis never blocks a track boundary. Last-second queue changes or a provider/network failure can therefore omit that transition’s MC callout.
 - The next music file is warmed in the browser. This does not make internet audio fully offline or promise sample-accurate, gapless music playback. Use the real speaker device for rehearsal.
 - All MC controls, script saves and synthesis requests require artist ownership. The audience cannot generate billable speech or edit announcements. Draft scripts are not in public snapshots. Live announcement text is shown during the callout.
 
@@ -168,3 +168,32 @@ Regression coverage includes delayed loads, large server-clock drift, repeated s
 ## Record label credit
 
 **New event** and **Edit event** include an optional **Record label** field. When supplied, the label appears below the event's artist/album information for both artists and audience members. Existing events keep an empty label until edited; tracks and release signups are preserved.
+
+
+## Split track clips and boundary recovery
+
+The refreshed artist player requests the split MC protocol. A song plays its
+own closing credit, then the server selects the actual next playlist/queue
+entry and plays that track’s opening introduction before its music. A queue
+arrival during the closing credit therefore gets the correct introduction.
+Named introductions are bound to the exact queue entry and name. If a late
+entry has no named recording yet, the already downloaded generic introduction
+for its actual track can play; an older name is never substituted.
+
+Generic opening and closing recordings are prepared for the full set in the
+background. The current closing credit, next opening and queued callouts are
+prioritized. Existing custom `mc_text` remains the closing script; the new
+`mc_intro_text` field stores the independent opening script. Optional show
+intro/outro remain separate. The song files are not rewritten or re-uploaded.
+An unavailable recording is skipped instead of waiting for TTS at a boundary.
+
+Older artist tabs retain their working combined protocol until refreshed.
+Refresh between songs to load this player. The new player times out a stalled
+control request and retries a failed transition only while the same audio
+instance remains ended; version/instance checks prevent double advancement
+when the server committed a request whose response was lost. It also warns
+before leaving a playing tab and reacquires a screen wake lock on return.
+
+The offline/downloaded transport remains on `development/local-show-audio`
+and is not part of this production change. Main still needs internet for
+server-coordinated transitions and new queue arrivals.
