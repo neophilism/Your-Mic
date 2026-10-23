@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `rap_allowed` integer DEFAULT 1 NOT NULL;
