@@ -35,6 +35,12 @@ async function snapshot(id:string,r:Request){
 async function splitTransition(e:any,b:any,r:Request,now:number){
   if(Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
   if(b.action==='finish-announcement'&&(!e.announcement_id||b.announcementId!==e.announcement_id))fail(409,'This announcement already changed.');
+  // The opening already owns its selected track/rapper. Finishing it needs
+  // neither another queue selection nor catalog/entry reads.
+  if(b.action==='finish-announcement'&&e.announcement_kind==='track-start'){
+    const result=await run('UPDATE events SET announcement_id=NULL,announcement_kind=NULL,status=?,position=0,started_at=?,playback_id=?,version=version+1 WHERE id=? AND version=?',e.current_track?'playing':'idle',e.current_track?now:null,crypto.randomUUID(),e.id,e.version);
+    if(!result.meta.changes)fail(409,'Playback changed.');return json(await snapshot(e.id,r));
+  }
   const ts=await all('SELECT * FROM tracks WHERE event_id=? ORDER BY position,id',e.id);
   const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",e.id);
   const clipFor=async(id:any,plan:any)=>id&&plan?first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND context=? AND state='ready'",id,e.id,plan.context):null;

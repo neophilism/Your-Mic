@@ -284,3 +284,19 @@ that just started. Regression tests cover late renewals, permanent ownership,
 concurrent claims, old replies, intentional takeovers, long song/MC sequences,
 poll drift, and heartbeat failures. A local 300-person load test exercises queue
 and API concurrency; it is not a deployed capacity certification.
+
+
+## Introduction-to-song latency
+
+Before a track opening plays, its complete selected music file must already
+be downloaded. The speaker confirms the opening's already chosen music while
+the opening is audible; it retains the native opening decoder until its natural
+end. The song then starts at zero from the local blob without waiting for a
+new boundary request. Queue selection still happens after the outgoing credit,
+so this does not predict or change the next rapper. Explicit pause/resume,
+selection, takeover and failure recovery retain their existing protections.
+
+If the confirmation cannot complete before the introduction ends, the player
+retains guarded server reconciliation rather than guessing or skipping a song.
+This is an optimization of the normal online player; persistent offline
+playback stays on the separate development branch.
