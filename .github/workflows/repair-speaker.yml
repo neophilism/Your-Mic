@@ -1,0 +1,38 @@
+name: Deploy speaker control repair
+
+# Explicit deployment avoids changing the live show on every source edit.
+on:
+  push:
+    branches: [repair/speaker-controls-20261023]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: your-mic-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      ARTIST_PASSWORD: ${{ secrets.ARTIST_PASSWORD }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check required configuration
+        run: node --input-type=module -e "import {deploymentCredentials} from './scripts/cloudflare-resources.mjs'; deploymentCredentials(process.env);"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - name: Provision storage, deploy and verify
+        run: pnpm run cloudflare:launch
