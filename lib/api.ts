@@ -23,7 +23,7 @@ async function guest(r:Request){const token=r.headers.get('x-guest-token')||'';i
 async function snapshot(id:string,r:Request){
   const e=await eventFor(id);const own=uid(r)===e.owner_id;
   const token=r.headers.get('x-guest-token');const gh=token?await hash(token):'';
-  const tracks=await all(`SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat${own?',mc_text,mc_intro_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
+  const tracks=await all(`SELECT id,title,position,duration,beat_duration,rap_allowed AS rapAllowed,beat_key IS NOT NULL AS hasBeat${own?',mc_text,mc_intro_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
   const queue=await all("SELECT id,track_id,name,status,created_at,guest_hash FROM entries WHERE event_id=? AND status IN ('waiting','playing') ORDER BY created_at,id",id);
   const {owner_id,controller_hash,intro_text,outro_text,local_session_id,local_sequence,...event}=e;
   Object.assign(event,{local_playback:!!local_session_id});
@@ -253,10 +253,11 @@ export async function api(r:Request){try{
   if(p[2]==='queue'&&method==='POST'){
     const e=await eventFor(id);if(!e.queue_open)fail(400,'The artist has closed the freestyle queue.');
     const gh=await guest(r);const b=await body(r);if(!text(b.name,40))fail(400,'What should the artist call you?');
-    if(!await first('SELECT id FROM tracks WHERE id=? AND event_id=?',b.trackId,id))fail(404,'Choose a track from this event.');
+    const chosen=await first('SELECT id,rap_allowed FROM tracks WHERE id=? AND event_id=?',b.trackId,id);if(!chosen)fail(404,'Choose a track from this event.');
+    if(chosen.rap_allowed===0)fail(400,'This song is for listening only. Choose another track to rap over.');
     const qid=crypto.randomUUID();
-    const result=await run("INSERT INTO entries(id,event_id,track_id,name,guest_hash,status,created_at) SELECT ?,?,?,?,?,'waiting',? WHERE NOT EXISTS(SELECT 1 FROM entries WHERE event_id=? AND guest_hash=? AND status IN ('waiting','playing')) AND (SELECT COUNT(*) FROM entries WHERE event_id=? AND status IN ('waiting','playing'))<500 AND EXISTS(SELECT 1 FROM events WHERE id=? AND queue_open=1)",qid,id,b.trackId,text(b.name,40),gh,Date.now(),id,gh,id,id);
-    if(!result.meta.changes)fail(409,'You are already queued, or this queue is full or closed.');return json(await snapshot(id,r),201);
+    const result=await run("INSERT INTO entries(id,event_id,track_id,name,guest_hash,status,created_at) SELECT ?,?,?,?,?,'waiting',? WHERE NOT EXISTS(SELECT 1 FROM entries WHERE event_id=? AND guest_hash=? AND status IN ('waiting','playing')) AND (SELECT COUNT(*) FROM entries WHERE event_id=? AND status IN ('waiting','playing'))<500 AND EXISTS(SELECT 1 FROM events WHERE id=? AND queue_open=1) AND EXISTS(SELECT 1 FROM tracks WHERE id=? AND event_id=? AND rap_allowed=1)",qid,id,b.trackId,text(b.name,40),gh,Date.now(),id,gh,id,id,b.trackId,id);
+    if(!result.meta.changes){if((await first('SELECT rap_allowed FROM tracks WHERE id=? AND event_id=?',b.trackId,id))?.rap_allowed===0)fail(400,'This song is for listening only. Choose another track to rap over.');fail(409,'You are already queued, or this queue is full or closed.');}return json(await snapshot(id,r),201);
   }
   if(p[2]==='queue'&&p[3]&&method==='DELETE'){
     const e=await eventFor(id);const q=await first('SELECT * FROM entries WHERE id=? AND event_id=?',p[3],id);if(!q)fail(404,'Queue entry not found.');
@@ -337,7 +338,15 @@ export async function api(r:Request){try{
     return json(await snapshot(id,r),201);
   }
   if(p[2]==='tracks'&&method==='PATCH'){
-    const b=await body(r);const ts=await all('SELECT id FROM tracks WHERE event_id=?',id);
+    const b=await body(r);
+    if(Object.hasOwn(b,'rapAllowed')){
+      if(!p[3]||p.length!==4||typeof b.rapAllowed!=='boolean')fail(400,'Choose whether this song allows rap requests.');
+      const updated=await run('UPDATE tracks SET rap_allowed=? WHERE id=? AND event_id=?',b.rapAllowed?1:0,p[3],id);
+      if(!updated.meta.changes)fail(404,'Track not found.');
+      // Availability does not mutate transport, audio, order or existing turns.
+      return json(await snapshot(id,r));
+    }
+    const ts=await all('SELECT id FROM tracks WHERE event_id=?',id);
     if(b.order){if(!Array.isArray(b.order)||b.order.length!==ts.length||new Set(b.order).size!==ts.length||ts.some(t=>!b.order.includes(t.id)))fail(400,'Refresh the playlist before changing its order.');await db().batch(b.order.map((tid:string,i:number)=>db().prepare('UPDATE tracks SET position=? WHERE id=? AND event_id=?').bind(i,tid,id)));}
     else if(p[3]&&text(b.title))await run('UPDATE tracks SET title=? WHERE id=? AND event_id=?',text(b.title),p[3],id);
     return json(await snapshot(id,r));

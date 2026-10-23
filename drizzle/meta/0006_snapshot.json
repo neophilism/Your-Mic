@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4d879c63-34a3-4d25-b6c5-5373423ad847",
+  "id": "3053e101-3847-4968-915b-75fe9ea256b5",
   "prevId": "cc910144-1c8e-4bf5-8f4f-45dc143257fc",
   "tables": {
     "entries": {
@@ -344,22 +344,6 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "local_session_id": {
-          "name": "local_session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "''"
-        },
-        "local_sequence": {
-          "name": "local_sequence",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
         }
       },
       "indexes": {
@@ -669,6 +653,14 @@
           "notNull": true,
           "autoincrement": false,
           "default": "''"
+        },
+        "rap_allowed": {
+          "name": "rap_allowed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
         },
         "position": {
           "name": "position",
