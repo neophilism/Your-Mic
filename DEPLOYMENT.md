@@ -134,3 +134,23 @@ The default `vite.config.ts`, Sites helper scripts and `.openai/hosting.json` pr
 - [R2 pricing](https://developers.cloudflare.com/r2/pricing/)
 - [Render compute pricing](https://render.com/pricing)
 - [Render outbound bandwidth](https://render.com/docs/outbound-bandwidth)
+
+
+## Artist playback controls
+
+The artist studio starts with transport and playlist controls collapsed. **Show controls** unlocks track selection, speaker play/skip, playlist changes and MC settings; **Hide controls** leaves a read-only now-playing summary and locks track clicks. Playback, queue refresh and speech preparation continue while collapsed. MC drafts stay mounted and finish saving.
+
+On the artist page, clicking a track uses the speaker player and replaces the current song. It does not start an audience headphone preview. Selecting a track before connecting claims the speaker and starts that selection. Audience-page previews remain private to their device. The active speaker lease and playback version guard still apply; an outdated advance cannot replace a newer manual selection.
+
+## Miles voice activation
+
+Miles belongs to **Deepgram Flux TTS**, model `flux-miles-en`, not Cloudflare's Aura-2 voice catalog. The integration uses Deepgram's batch `POST /v2/speak` endpoint and caches completed MP3 announcements in the same private R2 bucket. It uses the existing background preparation and safe late-edit behavior.
+
+1. Create a Deepgram account at https://console.deepgram.com/ and create a project API key with **Member** permissions. Enable usage/credits if required by Deepgram.
+2. In GitHub **Your-Mic → Settings → Secrets and variables → Actions**, add a repository secret named **DEEPGRAM_API_KEY**. Never commit or paste the value into chat.
+3. Run **Deploy Your Mic to Cloudflare** on `main`. The workflow passes the key directly into the Worker's secret store without logging it. An empty CI secret does not delete an existing Worker key. Alternatively set the Worker secret with `wrangler secret put DEEPGRAM_API_KEY --config wrangler.cloudflare.jsonc`.
+4. Reload the artist studio. **AI MC → Voice: Miles** confirms the selected provider. New recordings have distinct cache IDs from Zeus, and the browser retires the old voice cache when the profile changes.
+
+Until the key exists, the studio shows **Zeus · Miles setup pending** and retains working Cloudflare speech. A failed configured Flux request does not silently change voices; prior safe recordings can play, or the announcement is skipped so music continues.
+
+Reference: https://developers.deepgram.com/docs/flux-tts/voices and https://developers.deepgram.com/reference/speak/v-2/audio/generate .

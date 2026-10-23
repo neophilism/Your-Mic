@@ -1,8 +1,13 @@
-import {MC_MODEL, MC_VOICE, type McPlan} from './mc';
+import {MC_MODEL, MC_VOICE, MC_MILES_MODEL, type McPlan} from './mc';
 
-type SpeechEnv = {DB?: D1Database; BUCKET?: R2Bucket; AI?: {run(model: string, input: Record<string, unknown>): Promise<ReadableStream>}; MC_CLOUDFLARE_ACCOUNT_ID?: string; MC_CLOUDFLARE_API_TOKEN?: string};
+type SpeechEnv = {DEEPGRAM_API_KEY?: string; DB?: D1Database; BUCKET?: R2Bucket; AI?: {run(model: string, input: Record<string, unknown>): Promise<ReadableStream>}; MC_CLOUDFLARE_ACCOUNT_ID?: string; MC_CLOUDFLARE_API_TOKEN?: string};
 export function speechAvailable(env: SpeechEnv) {
-  return !!env.AI || !!(env.MC_CLOUDFLARE_ACCOUNT_ID && env.MC_CLOUDFLARE_API_TOKEN);
+  return !!env.DEEPGRAM_API_KEY?.trim() || !!env.AI || !!(env.MC_CLOUDFLARE_ACCOUNT_ID && env.MC_CLOUDFLARE_API_TOKEN);
+}
+export function speechProfile(env: SpeechEnv) {
+  return env.DEEPGRAM_API_KEY?.trim()
+    ? {model: MC_MILES_MODEL, voice: 'miles', label: 'Miles', provider: 'deepgram'}
+    : {model: MC_MODEL, voice: MC_VOICE, label: 'Zeus', provider: 'cloudflare'};
 }
 async function digest(value: string) {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
@@ -10,11 +15,12 @@ async function digest(value: string) {
 }
 
 export async function prepareMc(env: SpeechEnv, eventId: string, plan: McPlan) {
-  const id = await digest(JSON.stringify([eventId, MC_MODEL, MC_VOICE, plan.context, plan.text]));
+  const profile = speechProfile(env);
+  const id = await digest(JSON.stringify([eventId, profile.model, profile.voice, plan.context, plan.text]));
   const db = env.DB!, bucket = env.BUCKET!;
   const find = () => db.prepare('SELECT * FROM mc_clips WHERE id=? AND event_id=?').bind(id, eventId).first<any>();
   let clip = await find();
-  const response = (state: string, message = '') => ({id, context: plan.context, text: plan.text, state, message, audioUrl: state === 'ready' ? `/api/mc-audio/${id}` : null});
+  const response = (state: string, message = '') => ({id, voice: profile.label, context: plan.context, text: plan.text, state, message, audioUrl: state === 'ready' ? `/api/mc-audio/${id}` : null});
   if (clip?.state === 'ready') return response('ready');
   if (!speechAvailable(env)) return response('unavailable', 'The MC voice activates on Cloudflare. Music can still play here.');
   const now = Date.now();
@@ -31,7 +37,14 @@ export async function prepareMc(env: SpeechEnv, eventId: string, plan: McPlan) {
     const generation = (async () => {
       let stream: ReadableStream;
       const input = {text: plan.text, speaker: MC_VOICE, encoding: 'mp3'};
-      if (env.AI) stream = await env.AI.run(MC_MODEL, input);
+      if (profile.provider === 'deepgram') {
+        const result = await fetch(`https://api.deepgram.com/v2/speak?model=${MC_MILES_MODEL}&encoding=mp3`, {
+          method: 'POST', headers: {Authorization: `Token ${env.DEEPGRAM_API_KEY!.trim()}`, 'Content-Type': 'application/json'},
+          body: JSON.stringify({text: plan.text}), signal: AbortSignal.timeout(18000),
+        });
+        if (!result.ok || !result.body || !(result.headers.get('content-type') || '').startsWith('audio/')) throw Error('Speech provider unavailable');
+        stream = result.body;
+      } else if (env.AI) stream = await env.AI.run(MC_MODEL, input);
       else {
         const result = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(env.MC_CLOUDFLARE_ACCOUNT_ID!)}/ai/run/${MC_MODEL}`, {
           method: 'POST', headers: {Authorization: `Bearer ${env.MC_CLOUDFLARE_API_TOKEN}`, 'Content-Type': 'application/json'}, body: JSON.stringify(input), signal: AbortSignal.timeout(18000),

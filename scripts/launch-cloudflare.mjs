@@ -24,6 +24,8 @@ await command(['scripts/deploy-cloudflare.mjs']);
 const secrets=await cloudflareApi(credentials)('/workers/scripts/your-mic/secrets');
 if(!Array.isArray(secrets))throw Error('Could not confirm the existing Worker secret names.');
 const values={ARTIST_PASSWORD:credentials.password};
+// Optional: keep an existing Worker key when the CI secret is empty.
+if(process.env.DEEPGRAM_API_KEY?.trim())values.DEEPGRAM_API_KEY=process.env.DEEPGRAM_API_KEY.trim();
 if(!secrets.some(s=>s.name==='SESSION_SECRET'))values.SESSION_SECRET=randomBytes(48).toString('base64url');
 await command(['node_modules/wrangler/bin/wrangler.js','secret','bulk','--config','wrangler.cloudflare.jsonc'],JSON.stringify(values));
 

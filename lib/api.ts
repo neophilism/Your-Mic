@@ -3,7 +3,7 @@ import QRCode from 'qrcode/lib/core/qrcode.js';
 import SVG from 'qrcode/lib/renderer/svg-tag.js';
 import {nextSelection,playbackPosition,parseRange} from './playback';
 import {mcPlan,mcSpecialPlan,MC_TEXT_LIMIT} from './mc';
-import {prepareMc,speechAvailable} from './mc-storage';
+import {prepareMc,speechAvailable,speechProfile} from './mc-storage';
 const consent='Notify me by email when this album is available on streaming platforms.';
 const json=(v:any,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const fail=(s:number,m:string):never=>{throw Object.assign(new Error(m),{status:s});};
@@ -29,7 +29,7 @@ async function snapshot(id:string,r:Request){
   if(own)Object.assign(event,{intro_text,outro_text});
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
-  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env)}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),speakerHere:own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'')&&e.controller_until>Date.now()};
+  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),speakerHere:own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'')&&e.controller_until>Date.now()};
 }
 async function control(e:any,b:any,r:Request){
   const token=text(b.controller,80); if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Reconnect this speaker device.');
@@ -54,7 +54,7 @@ async function control(e:any,b:any,r:Request){
   } else if(b.action==='play'&&(e.current_track||e.announcement_id)){
     const result=await run("UPDATE events SET status='playing',started_at=?,controller_until=?,version=version+1 WHERE id=? AND version=?",now,now+45000,e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
   } else {
-    if(['next','end'].includes(b.action)&&Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
+    if(['next','end','select'].includes(b.action)&&Number(b.version)!==e.version)fail(409,'Playback changed. Refreshing the queue.');
     const ts=await all('SELECT * FROM tracks WHERE event_id=? ORDER BY position,id',e.id);
     const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",e.id);
     let pick=nextSelection(e,ts,qs);
@@ -213,3 +213,4 @@ export async function api(r:Request){try{
   }
   fail(404,'Not found.');
 }catch(error:any){if(!error.status)console.error('Your Mic API error',error);return json({error:error.status?error.message:'Something went wrong. Please try again.'},error.status||500);}}
+

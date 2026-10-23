@@ -1,5 +1,6 @@
 declare namespace Cloudflare {
   interface Env {
+    DEEPGRAM_API_KEY?: string;
     DB?: D1Database;
     BUCKET?: R2Bucket;
     AI?: {run(model: string, input: Record<string, unknown>): Promise<ReadableStream>};

@@ -50,5 +50,22 @@ try{
  s=await req(base+'/tracks','PATCH',{order:[b.id,a.id]},owner);assert.equal(s.tracks[0].id,b.id);
  await req(base+'/subscribe','POST',{email:'bad',consent:true},guest,400);
  await req(base+'/subscribe','POST',{email:'ok@example.test',consent:false},guest,400);
+ // A manual artist selection replaces the current performance and invalidates
+ // any in-flight advance from the outgoing audio element.
+ s=await req(base+'/control','POST',{action:'select',controller,version:s.event.version,trackId:a.id},host);
+ const selectedVersion=s.event.version;
+ s=await req(base,'PATCH',{action:'mode',mode:'auto'},host);
+ const queuedGuest={'x-guest-token':randomUUID()};
+ const queued=await req(base+'/queue','POST',{name:'Selection test',trackId:b.id},queuedGuest,201);
+ s=await req(base+'/control','POST',{action:'next',controller,version:s.event.version},host);
+ assert.equal(s.event.current_entry,queued.queue[0].id);
+ const outgoingVersion=s.event.version;
+ s=await req(base+'/control','POST',{action:'select',controller,version:s.event.version,trackId:a.id},host);
+ assert.equal(s.event.current_track,a.id);assert.equal(s.event.current_entry,null);assert.equal(s.event.position,0);
+ assert.equal(s.queue.filter(q=>q.status==='playing').length,0);
+ await req(base+'/control','POST',{action:'next',controller,version:outgoingVersion},host,409);
+ await req(base+'/control','POST',{action:'select',controller,version:selectedVersion,trackId:b.id},host,409);
+ assert.equal((await req(base,'GET')).event.current_track,a.id);
  console.log('Integration passed: event ownership, uploads, beat playback, QR, consent/export, anonymous queue, duplicate prevention, FIFO, all three modes, boundary changes, resume/repeat, completion, speaker lease, stale advances, seeking and reorder.');
 }finally{await mf.dispose();}
+

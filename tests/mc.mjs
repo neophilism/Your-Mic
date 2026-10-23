@@ -28,11 +28,18 @@ assert(mcSpecialPlan({...event,intro_text:'Welcome to {album}, by {artist}!'},'i
 const wav=new Uint8Array(16044), view=new DataView(wav.buffer);
 for(const [offset,string]of[[0,'RIFF'],[8,'WAVE'],[12,'fmt '],[36,'data']])for(let n=0;n<string.length;n++)wav[offset+n]=string.charCodeAt(n);
 view.setUint32(4,wav.length-8,true);view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,8000,true);view.setUint32(28,16000,true);view.setUint16(32,2,true);view.setUint16(34,16,true);view.setUint32(40,16000,true);
+const flux=process.env.TEST_MC_PROVIDER==='flux';
 let calls=0,failSpeech=false;
 const built=await build({stdin:{contents:"import {api} from './lib/api.ts';export default {fetch:api};",resolveDir:process.cwd()},bundle:true,write:false,platform:'browser',format:'esm',external:['cloudflare:workers']});
-const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET'],bindings:{MC_CLOUDFLARE_ACCOUNT_ID:'test-account',MC_CLOUDFLARE_API_TOKEN:'test-token'},outboundService:async request=>{
-  assert.equal(new URL(request.url).hostname,'api.cloudflare.com');assert(request.url.endsWith('/ai/run/@cf/deepgram/aura-2-en'));
-  const body=await request.json();assert.equal(body.speaker,'zeus');assert.equal(body.encoding,'mp3');calls++;
+const mf=new Miniflare({modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],d1Databases:['DB'],r2Buckets:['BUCKET'],bindings:flux?{DEEPGRAM_API_KEY:'test-only-deepgram-key'}:{MC_CLOUDFLARE_ACCOUNT_ID:'test-account',MC_CLOUDFLARE_API_TOKEN:'test-token'},outboundService:async request=>{
+  const url=new URL(request.url),body=await request.json();
+  if(flux){
+    assert.equal(url.origin,'https://api.deepgram.com');assert.equal(url.pathname,'/v2/speak');
+    assert.equal(url.searchParams.get('model'),'flux-miles-en');assert.equal(url.searchParams.get('encoding'),'mp3');
+    assert.equal(request.headers.get('authorization'),'Token test-only-deepgram-key');assert.equal(typeof body.text,'string');
+    assert(!('speaker' in body));
+  }else{assert.equal(url.hostname,'api.cloudflare.com');assert(request.url.endsWith('/ai/run/@cf/deepgram/aura-2-en'));assert.equal(body.speaker,'zeus');assert.equal(body.encoding,'mp3');}
+  calls++;
   return failSpeech?new Response('unavailable',{status:503}):new Response(wav,{headers:{'Content-Type':'audio/mpeg'}});
 }});
 try{
@@ -42,13 +49,13 @@ try{
  async function req(path,method='GET',body,headers=host,status=200){const response=await mf.dispatchFetch('https://mc.test/api/'+path,{method,headers:{'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json();assert.equal(response.status,status,JSON.stringify(data));return data;}
  const created=await req('events','POST',{title:'The Show',artist:'The Artist',album:'The Album'},host,201);const base='events/'+created.id;
  const now=Date.now();await DB.batch(['a','b'].map((id,index)=>DB.prepare('INSERT INTO tracks(id,event_id,title,position,duration,audio_key,mime) VALUES(?,?,?,?,?,?,?)').bind(id,created.id,'Track '+id.toUpperCase(),index,180,id+'.mp3','audio/mpeg')));
- let s=await req(base);assert.equal(s.event.intro_enabled,0);assert.equal(s.event.outro_enabled,0);assert.equal(s.speechAvailable,true);
+ let s=await req(base);assert.equal(s.event.intro_enabled,0);assert.equal(s.event.outro_enabled,0);assert.equal(s.speechAvailable,true);assert.equal(s.mcVoice,flux?'Miles':'Zeus');assert.equal(s.milesReady,flux);
  await req(base+'/mc','PATCH',{trackId:'a',text:'Nope'},guest,401);
  await req(base+'/mc','POST',{},guest,401);
  await req(base+'/mc','PATCH',{trackId:'foreign',text:'Nope'},host,404);
  await req(base+'/mc','PATCH',{trackId:'a',text:'x'.repeat(601)},host,400);
  await req(base+'/mc','PATCH',{introEnabled:true,outroEnabled:true,introText:'Welcome to {album}!',outroText:'Thanks, everybody. That’s the show!'});
- const intro=await req(base+'/mc','POST',{kind:'intro'});assert.equal(intro.state,'ready');
+ const intro=await req(base+'/mc','POST',{kind:'intro'});assert.equal(intro.state,'ready');assert.equal(intro.voice,flux?'Miles':'Zeus');
  await req(base+'/mc','POST',{kind:'intro'});assert.equal(calls,1,'Unchanged audio is cached');
  s=await req(base+'/control','POST',{action:'claim',controller});
  s=await req(base+'/control','POST',{action:'play',controller,mcClipId:intro.id});assert.equal(s.event.announcement_kind,'intro');assert.equal(s.event.current_track,'a');

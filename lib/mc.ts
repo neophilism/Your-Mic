@@ -1,5 +1,6 @@
 export const MC_MODEL = '@cf/deepgram/aura-2-en';
 export const MC_VOICE = 'zeus';
+export const MC_MILES_MODEL = 'flux-miles-en';
 export const MC_TEXT_LIMIT = 600;
 
 export type McPlan = {context: string; text: string; kind: 'between' | 'intro' | 'outro'; nextTrackId: string | null; nextEntryId: string | null};

@@ -15,18 +15,20 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
   const order = useRef(0), activeEvent = useRef('');
   const [status, setStatus] = useState(''), [revision, setRevision] = useState(0);
   const eventId = snapshot?.event.id || '';
+  const voice = snapshot?.mcVoice || 'Zeus';
+  const activeVoice = useRef(voice);activeVoice.current = voice;
   activeEvent.current = eventId;
   const prepare = useCallback(async (kind: 'between' | 'intro' | 'outro' = 'between', trackId?: string, force = false) => {
     if (!eventId || !current.current?.isOwner) return null;
     const s = current.current;
-    const requestKey = JSON.stringify([kind, trackId, force ? ++order.current : null, kind === 'between' ? mcPreparationKey(s.event, s.tracks, nextSelection(s.event, s.tracks, s.queue)) : mcSpecialPlan(s.event, kind).text]);
+    const requestKey = JSON.stringify([voice, kind, trackId, force ? ++order.current : null, kind === 'between' ? mcPreparationKey(s.event, s.tracks, nextSelection(s.event, s.tracks, s.queue)) : mcSpecialPlan(s.event, kind).text]);
     if (inFlight.current.has(requestKey)) return inFlight.current.get(requestKey);
     const generationOrder = ++order.current;
     const job = (async () => {
       if (kind === 'between') setStatus('Preparing announcement…');
       try {
         const clip = await request(`events/${eventId}/mc`, {method: 'POST', body: JSON.stringify({kind, trackId})});
-        if (activeEvent.current !== eventId) return null;
+        if (activeEvent.current !== eventId || activeVoice.current !== voice) return null;
         if (clip.state !== 'ready') {
           if (kind === 'between') setStatus(clip.message || (clip.state === 'idle' ? '' : 'Preparing announcement. Previous ready audio stays in place.'));
           return null;
@@ -47,7 +49,7 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
           });
           const ready = {id: clip.id, context: clip.context, text: clip.text, url, order: generationOrder};
           const previous = cache.current.get(clip.context);
-          if (activeEvent.current !== eventId || (previous && previous.order > generationOrder)) {URL.revokeObjectURL(url);return previous || null;}
+          if (activeEvent.current !== eventId || activeVoice.current !== voice || (previous && previous.order > generationOrder)) {URL.revokeObjectURL(url);return previous || null;}
           // Retain old URLs until event cleanup: one may already be on the speaker.
           retired.current.add(url);recordings.current.set(clip.id, ready);
           if (retired.current.size > 40) for (const oldUrl of retired.current) {
@@ -70,12 +72,12 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
     })();
     inFlight.current.set(requestKey, job);
     return job;
-  }, [eventId, request]);
+  }, [eventId, voice, request]);
   const retired = useRef(new Set<string>());
   useEffect(() => {
     cache.current.clear();recordings.current.clear();inFlight.current.clear();setStatus('');
     return () => {for (const url of retired.current) URL.revokeObjectURL(url);retired.current.clear();};
-  }, [eventId]);
+  }, [eventId, voice]);
   const key = snapshot ? mcPreparationKey(snapshot.event, snapshot.tracks, nextSelection(snapshot.event, snapshot.tracks, snapshot.queue)) : '';
   useEffect(() => {
     if (!admin || !snapshot?.isOwner) return;

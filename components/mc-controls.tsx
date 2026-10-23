@@ -46,8 +46,10 @@ export function McControls({snapshot, request, accept, mc, onEnd}: {snapshot: an
     audio.current.play().catch(() => setSaveState('Tap preview again to allow audio.'));
   };
   const playing = snapshot.speakerHere && event.status === 'playing';
+  useEffect(() => {if (playing) audio.current?.pause();}, [playing]);
   return <details className="mc-controls">
     <summary><span><Mic size={16}/> AI MC</span><span>{event.mc_enabled ? 'On between songs' : 'Off between songs'}</span></summary>
+    <p className="mc-description">Voice: {snapshot.mcVoice || 'Zeus'}{!snapshot.milesReady && ' · Miles setup pending'}</p>
     <p className="mc-description">Brief AI-generated announcements on your speaker. Each name is called before their beat starts.</p>
     <div className="mc-checks">
       <label><input type="checkbox" checked={!!event.mc_enabled} onChange={e => saveSettings({enabled: e.target.checked})}/> Announce between songs</label>
