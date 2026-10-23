@@ -91,6 +91,10 @@ try{
  assert.equal(s.event.position,23.5);assert.equal(s.speakerOwnedHere,true);
  const withoutLabel=await req('events','POST',{title:'No label',artist:'Independent artist'},owner,201);
  assert.equal((await req('events/'+withoutLabel.id,'GET')).event.record_label,'');
+ // Reconnecting after lease expiry must not count offline minutes as audio.
+ await DB.prepare("UPDATE events SET controller_until=?,position=?,started_at=?,status='playing' WHERE id=?").bind(Date.now()-5000,23.5,Date.now()-600000,created.id).run();
+ const reconnected=await req(base+'/control','POST',{action:'claim',controller},host);
+ assert.equal(reconnected.event.position,23.5);
  console.log('Integration passed: event ownership, uploads, beat playback, QR, consent/export, anonymous queue, duplicate prevention, FIFO, all three modes, boundary changes, resume/repeat, completion, speaker lease, stale advances, seeking and reorder.');
 }finally{await mf.dispose();}
 
