@@ -1,7 +1,7 @@
 // The speaker's decoded audio clock is authoritative during a performance.
 // Server polling may change the transport or source, but must never seek an
 // already-loaded song to catch up with a wall clock after buffering or latency.
-export type SpeakerTarget = {key: string; source: string; status: string; position: number};
+export type SpeakerTarget = {key: string; source: string; status: string; position: number; before?: string};
 export function speakerFailureMessage(error: unknown) {
   const e = error as {name?: string; message?: string; mediaCode?: number};
   if (e?.name === 'NotAllowedError') return 'The browser blocked automatic audio. Click Resume speaker to allow playback.';
@@ -65,7 +65,8 @@ export class SpeakerPlayback {
     // later snapshots cannot consume the opening bars or move the playhead.
     const position = Math.max(0, target.position || 0);
     this.startPosition = position;
-    void this.resolveSource(target.source).then(source => {
+    const sourceReady = target.before ? this.resolveSource(target.before).then(() => this.resolveSource(target.source)) : this.resolveSource(target.source);
+    void sourceReady.then(source => {
       if (generation !== this.generation) return;
       this.metadata = () => {
         if (generation !== this.generation || this.failedGeneration === generation) return;

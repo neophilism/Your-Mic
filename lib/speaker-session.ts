@@ -38,6 +38,7 @@ export class SpeakerResume {
   constructor(send: (key: string) => Promise<unknown>, failed: (error: unknown) => void) {this.send = send;this.failed = failed;}
   begin(key: string) {this.wanted = key;}
   clear() {this.wanted = '';}
+  transfer(from: string, to: string) {if (this.wanted === from) this.wanted = to;}
   status(key: string, status: string) {
     if (this.wanted && this.wanted !== key) this.clear();
     return this.wanted && this.wanted === key ? 'playing' : status;
