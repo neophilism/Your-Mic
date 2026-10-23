@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {downloadShow, verifySavedShow, showFingerprint, showSources, audioKey, readLocalAudio, removeSavedShow} from '../lib/local-audio.ts';
 const require = createRequire(import.meta.url), wranglerRequire = createRequire(require.resolve('wrangler/package.json'));
 const {build} = wranglerRequire('esbuild');
 const built = await build({entryPoints: ['lib/local-show.ts'], bundle: true, write: false, platform: 'node', format: 'esm'});
-const {LocalShow} = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'));
+await mkdir('work',{recursive:true});await writeFile('work/local-show-test-bundle.mjs',built.outputFiles[0].text);
+const {LocalShow} = await import('../work/local-show-test-bundle.mjs');
 class Store {
   values = new Map();
   async get(store, key) {return structuredClone(this.values.get(store + key));}
@@ -84,15 +86,17 @@ test('mode/schedule changes wait for boundary; mic mode waits offline when empty
   const show = new LocalShow({...snapshot(), queue: []}, 'local');show.patch({action: 'mode', mode: 'mic'});
   assert.equal(show.snapshot.event.mode, 'auto');show.transition('next', 120, noClip);assert.equal(show.snapshot.event.status, 'idle');assert.equal(show.snapshot.event.mode, 'mic');
 });
-test('downloaded announcements finish into their chosen music without repeating or advancing twice', () => {
+test('downloaded closing -> actual next opening -> music never advances the queue twice', () => {
   const s = snapshot();s.event.mc_enabled = 1;const show = new LocalShow(s, 'local');
-  show.transition('next', 120, plan => ({id: 'clip', context: plan.context, text: plan.text, source: 'saved'}));
-  assert.equal(show.snapshot.event.announcement_id, 'clip');assert.equal(show.snapshot.event.current_entry, 'q1');const key = show.snapshot.event.playback_id;
-  show.transition('finish-announcement', 4, noClip);assert.equal(show.snapshot.event.announcement_id, null);assert.equal(show.snapshot.event.current_entry, 'q1');assert.notEqual(show.snapshot.event.playback_id, key);
+  const clip = plan => plan ? {id: plan.kind, context: plan.context, text: plan.text, source: 'saved'} : null;
+  show.transition('next', 120, clip);assert.equal(show.snapshot.event.announcement_kind, 'track-end');assert.equal(show.snapshot.event.current_entry, null);assert.equal(show.snapshot.event.current_track, 'a');
+  const closingKey = show.snapshot.event.playback_id;
+  show.transition('finish-announcement', 4, clip);assert.equal(show.snapshot.event.announcement_kind, 'track-start');assert.equal(show.snapshot.event.current_entry, 'q1');assert.equal(show.snapshot.event.current_track, 'b');
+  show.transition('finish-announcement', 4, clip);assert.equal(show.snapshot.event.announcement_id, null);assert.equal(show.snapshot.event.current_entry, 'q1');assert.notEqual(show.snapshot.event.playback_id, closingKey);
 });
 test('missing MC never blocks music; optional intro and early outro work locally', () => {
   const s = snapshot();s.event.intro_enabled = 1;s.event.intro_played = 0;s.event.current_track = null;s.event.album_cursor = null;s.event.outro_enabled = 1;
-  const show = new LocalShow(s, 'local'), clip = plan => ({id: plan.kind, context: plan.context, text: plan.text, source: 'saved'});
+  const show = new LocalShow(s, 'local'), clip = plan => plan ? ({id: plan.kind, context: plan.context, text: plan.text, source: 'saved'}) : null;
   show.transition('play', 0, clip);assert.equal(show.snapshot.event.announcement_kind, 'intro');show.transition('finish-announcement', 4, noClip);assert.equal(show.snapshot.event.current_track, 'b');
   show.patch({endAfterTrack: true});show.transition('next', 120, clip);assert.equal(show.snapshot.event.announcement_kind, 'outro');show.transition('finish-announcement', 4, noClip);assert.equal(show.snapshot.event.status, 'idle');assert.equal(show.snapshot.event.show_ended, 1);
   const other = new LocalShow(snapshot(), 'local');other.snapshot.event.mc_enabled = 1;other.transition('next', 120, noClip);assert.equal(other.snapshot.event.status, 'playing');assert.equal(other.snapshot.event.announcement_id, null);
@@ -101,4 +105,19 @@ test('reports are monotonic, bound completed turns, and retain unacknowledged wo
   const show = new LocalShow(snapshot(), 'local');show.transition('next', 100, noClip);show.transition('next', 100, noClip);
   const first = show.report(21);assert.deepEqual(first.completedIds, ['q1']);show.transition('next', 100, noClip);
   show.acknowledge(first);const second = show.report(2);assert(second.sequence > first.sequence);assert.deepEqual(second.completedIds, ['q2']);assert.equal(second.state.position, 2);
+});
+
+test('closing credit leaves the next selection open for late queue arrivals', () => {
+ const s=snapshot();s.queue=[];s.event.mc_enabled=1;const show=new LocalShow(s,'local');
+ const clip=plan=>plan?{id:plan.kind,context:plan.context,text:plan.text,source:'saved'}:null;
+ show.transition('next',120,clip);assert.equal(show.snapshot.event.current_track,'a');
+ const remote=snapshot();remote.event.mc_enabled=1;remote.event.version=100;show.merge(remote);
+ show.transition('finish-announcement',4,clip);assert.equal(show.snapshot.event.current_entry,'q1');assert.equal(show.snapshot.event.current_track,'b');
+ show.transition('finish-announcement',4,clip);show.patch({endAfterTrack:true});show.transition('next',120,clip);assert.equal(show.snapshot.event.announcement_kind,'track-end');
+ show.snapshot.event.outro_enabled=1;show.transition('finish-announcement',4,clip);assert.equal(show.snapshot.event.announcement_kind,'outro');assert.equal(show.snapshot.event.show_ended,1);
+});
+test('a restored long-offline show accepts the first fresh queue snapshot immediately', () => {
+ const s=snapshot();s.queue=[];const show=new LocalShow(s,'local');for(let i=0;i<60;i++)show.transition('next',120,noClip);
+ const restored=LocalShow.restore(show.checkpoint('controller'));assert.equal(restored.remoteVersion,4);
+ const remote=snapshot();remote.event.version=5;restored.merge(remote);assert(restored.snapshot.queue.some(q=>q.id==='q1'));
 });

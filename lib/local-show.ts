@@ -1,8 +1,8 @@
 import {nextSelection} from './playback';
-import {mcPlan, mcSpecialPlan, type McPlan} from './mc';
+import {mcTrackPlan, mcSpecialPlan, type McPlan} from './mc';
 
 export type LocalClip = {id: string; context: string; text: string; source: string};
-export type LocalCheckpoint = {session: string; controller: string; snapshot: any; completed: string[]; pending: string[]; sequence: number};
+export type LocalCheckpoint = {session: string; controller: string; snapshot: any; completed: string[]; pending: string[]; sequence: number; remoteVersion?: number};
 export type LocalReport = {sequence: number; state: any; completedIds: string[]};
 const metadata = ['title', 'artist', 'album', 'record_label', 'location', 'mc_enabled', 'intro_enabled', 'intro_text', 'outro_enabled', 'outro_text'];
 
@@ -24,6 +24,7 @@ export class LocalShow {
   }
   static restore(saved: LocalCheckpoint) {
     const show = new LocalShow(saved.snapshot, saved.session);
+    show.remoteVersion = saved.remoteVersion ?? saved.snapshot.event.version;
     show.sequence = saved.sequence; show.completed = new Set(saved.completed); show.pending = new Set(saved.pending);
     // Reloads require a tap. Never count time with the tab closed as song progress.
     if (show.snapshot.event.status === 'playing') show.snapshot.event.status = 'paused';
@@ -31,7 +32,7 @@ export class LocalShow {
     return show;
   }
   checkpoint(controller: string): LocalCheckpoint {
-    return {session: this.session, controller, snapshot: structuredClone(this.snapshot), completed: [...this.completed], pending: [...this.pending], sequence: this.sequence};
+    return {session: this.session, controller, snapshot: structuredClone(this.snapshot), completed: [...this.completed], pending: [...this.pending], sequence: this.sequence, remoteVersion: this.remoteVersion};
   }
   setPosition(position: number) {
     if (Number.isFinite(position)) this.snapshot.event.position = Math.max(0, Math.min(7200, position));
@@ -66,9 +67,19 @@ export class LocalShow {
     this.setPosition(position);
     if (action === 'pause') {e.status = 'paused'; e.started_at = null; return s;}
     if (action === 'play' && (e.current_track || e.announcement_id)) {e.status = 'playing'; e.started_at = this.now(); return s;}
-    if ((action === 'next' || action === 'finish-announcement') && e.announcement_id) {
-      Object.assign(e, {announcement_id: null, announcement_kind: null, position: 0, started_at: e.current_track ? this.now() : null, status: e.current_track ? 'playing' : 'idle', playback_id: this.uuid()});
-      s.announcementText = null; e.version++; return s;
+    const currentTrack = s.tracks.find((t: any) => t.id === e.current_track);
+    const currentEntry = s.queue.find((q: any) => q.id === e.current_entry);
+    if (!e.announcement_id && currentTrack && (action === 'next' || action === 'end')) {
+      const closing = clipFor(mcTrackPlan(e, currentTrack, 'track-end'));
+      if (closing) {
+        Object.assign(e, {announcement_id: closing.id, announcement_kind: 'track-end', position: 0, started_at: this.now(), status: 'playing', playback_id: this.uuid(), end_after_track: action === 'end' ? 1 : e.end_after_track, version: e.version + 1});
+        s.announcementText = closing.text;return s;
+      }
+    }
+    if ((action === 'next' || action === 'finish-announcement') && e.announcement_id && e.announcement_kind !== 'track-end') {
+      const opening = e.announcement_kind === 'intro' ? clipFor(mcTrackPlan(e, currentTrack, 'track-start', currentEntry), {track: currentTrack, entry: currentEntry}) : null;
+      Object.assign(e, {announcement_id: opening?.id || null, announcement_kind: opening ? 'track-start' : null, position: 0, started_at: e.current_track || opening ? this.now() : null, status: e.current_track || opening ? 'playing' : 'idle', playback_id: this.uuid()});
+      s.announcementText = opening?.text || null;e.version++;return s;
     }
     let pick = nextSelection(e, s.tracks, s.queue);
     if (action === 'select') {
@@ -76,17 +87,19 @@ export class LocalShow {
       if (!track) throw Error('This track is not in the downloaded show.');
       pick = {mode: e.mode === 'auto' ? 'auto' : 'album', entry: null, track, cursor: track.id};
     }
-    const ending = action === 'end' || action === 'next' && !!e.end_after_track;
+    const ending = action === 'end' || !!e.end_after_track && (action === 'next' || action === 'finish-announcement' && e.announcement_kind === 'track-end');
     if (ending) pick = {mode: pick.mode, entry: null, track: null, cursor: e.album_cursor};
     const starting = action === 'play' && !e.current_track && !e.intro_played;
-    const plan = ending ? (e.outro_enabled ? mcSpecialPlan(e, 'outro') : null) : starting ? (e.intro_enabled ? mcSpecialPlan(e, 'intro') : null) : action === 'next' ? mcPlan(e, s.tracks, pick) : null;
-    const clip = clipFor(plan, pick);
+    const plan = ending ? (e.outro_enabled ? mcSpecialPlan(e, 'outro') : null) : starting ? (e.intro_enabled ? mcSpecialPlan(e, 'intro') : null) : null;
+    const specialClip = clipFor(plan, pick);
+    const clip = specialClip || (!ending ? clipFor(mcTrackPlan(e, pick.track, 'track-start', pick.entry), pick) : null);
+    const kind = specialClip ? plan!.kind : clip ? 'track-start' : null;
     if (e.current_entry) {this.completed.add(e.current_entry); this.pending.add(e.current_entry);}
     s.queue = s.queue.filter((q: any) => !this.completed.has(q.id)).map((q: any) => ({...q, status: q.id === pick.entry?.id ? 'playing' : 'waiting'}));
     Object.assign(e, {mode: pick.mode, pending_mode: null, mic_after_track: e.mic_after_track === e.current_track ? null : e.mic_after_track,
       current_track: pick.track?.id || null, current_entry: pick.entry?.id || null, album_cursor: pick.cursor,
       status: pick.track || clip ? 'playing' : 'idle', position: 0, started_at: pick.track || clip ? this.now() : null,
-      announcement_id: clip?.id || null, announcement_kind: clip ? plan!.kind : null, playback_id: this.uuid(),
+      announcement_id: clip?.id || null, announcement_kind: kind, playback_id: this.uuid(),
       intro_played: ending ? 0 : starting ? 1 : e.intro_played, end_after_track: 0, show_ended: ending ? 1 : 0, queue_open: ending ? 0 : e.queue_open, version: e.version + 1});
     s.announcementText = clip?.text || null;
     return s;

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e70dc59b-530a-45f7-a276-c47a90fb635f",
+  "id": "6351433b-9daf-45ba-9c91-278da2029bd5",
   "prevId": "481553be-5817-4e30-9113-e9c6ac62b593",
   "tables": {
     "entries": {
@@ -344,22 +344,6 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "local_session_id": {
-          "name": "local_session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "''"
-        },
-        "local_sequence": {
-          "name": "local_sequence",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
         }
       },
       "indexes": {
@@ -567,6 +551,14 @@
         },
         "mc_text": {
           "name": "mc_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "mc_intro_text": {
+          "name": "mc_intro_text",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
