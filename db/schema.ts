@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, uniqueIndex, index, primaryKey } from 'drizzle-orm/sqlite-core';
 export const events = sqliteTable('events', {
   id: text('id').primaryKey(), ownerId: text('owner_id').notNull(), title: text('title').notNull(),
   artist: text('artist').notNull(), recordLabel: text('record_label').notNull().default(''), playbackId: text('playback_id').notNull().default(''), album: text('album').notNull().default(''), location: text('location').notNull().default(''),
@@ -36,3 +36,10 @@ export const mcClips = sqliteTable('mc_clips', {
   context: text('context').notNull(), text: text('text').notNull(), state: text('state').notNull(), audioKey: text('audio_key'),
   lease: text('lease').notNull(), leaseUntil: integer('lease_until').notNull().default(0), createdAt: integer('created_at').notNull(),
 },t=>[index('mc_clips_event').on(t.eventId,t.createdAt)]);
+
+export const trackPlays = sqliteTable('track_plays', {
+  eventId: text('event_id').notNull().references(()=>events.id, {onDelete: 'cascade'}),
+  playbackId: text('playback_id').notNull(),
+  trackId: text('track_id').notNull().references(()=>tracks.id, {onDelete: 'cascade'}),
+  kind: text('kind').notNull(), playedAt: integer('played_at').notNull(),
+},t=>[primaryKey({columns:[t.eventId,t.playbackId]}), index('track_plays_event_track').on(t.eventId,t.trackId)]);

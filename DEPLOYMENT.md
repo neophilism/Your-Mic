@@ -140,7 +140,7 @@ The default `vite.config.ts`, Sites helper scripts and `.openai/hosting.json` pr
 
 The artist studio starts with transport and playlist controls collapsed. **Show controls** unlocks track selection, speaker play/skip, playlist changes and MC settings; **Hide controls** leaves a read-only now-playing summary and locks track clicks. Playback, queue refresh and speech preparation continue while collapsed. MC drafts stay mounted and finish saving.
 
-On the artist page, clicking a track uses the speaker player and replaces the current song. It does not start an audience headphone preview. Selecting a track before connecting claims the speaker and starts that selection. Audience-page previews remain private to their device. The active speaker lease and playback version guard still apply; an outdated advance cannot replace a newer manual selection.
+On the artist page, clicking a track uses the speaker player and replaces the current song. It does not start an audience headphone preview. Selecting a track before connecting claims the speaker and starts that selection. Audience-page previews remain private to their device. Explicit speaker ownership and the playback version guard still apply; an outdated advance cannot replace a newer manual selection.
 
 ## Miles voice activation
 
@@ -161,7 +161,7 @@ The speaker uses complete, buffered audio files. Current-song downloading finish
 
 The speaker audio decoder is the authority for its playhead. Polling, late API replies and MC preparation never seek a running song to a server clock. A song starts at zero after download; an explicit resume/takeover position is applied once. Each track/announcement instance has a separate `playback_id`, including repeats of the same song. Old heartbeats and late media loads cannot reset a newer instance. Pause and reconnect report the actual decoded position.
 
-A single failed heartbeat no longer pauses audio. Buffered playback continues while the app retries, up to the existing 45-second speaker lease. An explicit takeover, authentication rejection or expired lease still stops the old controller. The screen should remain awake; device output changes, Bluetooth faults and operating-system interruptions remain outside the website's control.
+Speaker ownership has no automatic expiry. Missed heartbeats do not pause buffered audio. The controller retains ownership until an explicit takeover. An explicit ownership rejection still stops the old controller. The screen should remain awake; device output changes, Bluetooth faults and operating-system interruptions remain outside the website's control.
 
 Regression coverage includes delayed loads, large server-clock drift, repeated snapshots, pause/resume, same-track repeat, MC boundaries, stale downloads, truncated audio, stale heartbeat positions, lease ownership and optional public record labels. When `DEEPGRAM_API_KEY` is supplied, deployment also synthesizes a short Miles sound check with the real provider and discards that test recording.
 
@@ -271,3 +271,53 @@ The receiver regression covers both default and supplied native fetch.
 Browser verification also exercises the real default downloader without a
 substitute fetch function. The dedicated **Resume speaker** action always
 retries/resumes; it cannot toggle to Pause when server state still says Playing.
+
+
+## Artist-only play counts
+
+Open **Play counts** below the set/queue on the artist page, then **Refresh
+counts** after the show. Each track has private headphone listens, live speaker
+plays, and rap turns (the freestyle subset of live plays). Counts are per event
+and begin with this release; historical listening cannot be reconstructed.
+A start counts even if the song is subsequently skipped. Pausing/resuming or
+retrying the same playback ID does not add another play. Announcements are
+excluded. Repeated song/beat selections receive new play IDs.
+
+The `track_plays` table and `/api/events/:id/plays` reporting endpoint are
+separate from playback. Native `playing` events enqueue reports without waiting
+for the server. Failed reports retry in the background; the small pending queue
+survives reloads in this tab when session storage is available. Read access and
+live/rap writes require event ownership. Audience browsers can submit private
+preview starts with their anonymous pass, but cannot read any totals or submit
+live/rap plays. No listener identity is stored in the statistics table. Counting
+and report errors never invoke pause, seek, advance or speaker control. Counts
+refresh only on request, not on every audience poll. This release keeps simple
+start counts rather than adding per-second or completion tracking.
+
+
+## Speaker ownership and startup sequencing
+
+Speaker ownership has **no automatic timeout**. A device remains the controller
+until the artist explicitly chooses **Take over speaker** on another device.
+Closing the original tab does not grant control to another device automatically;
+Take over remains available to recover an abandoned controller. Heartbeats
+report connection/playhead status and cannot stop a song because they are late.
+The old `controller_until` field is maintained for older clients' compatibility;
+it is not an ownership or playback deadline in the updated application.
+
+The old client timer paused sound after 45 seconds without a heartbeat. That
+timer is removed. Heartbeats run immediately, every 15 seconds, and on
+focus/visibility/online recovery; requests do not overlap. The server accepts
+late heartbeats from the current controller and rejects unforced claims by
+other devices, including simultaneous requests. Explicit takeovers remain
+authoritative. Reconnection uses the last decoded position, not offline minutes
+on a wall clock. Main still requires connectivity for server-selected song/queue
+transitions; the persistent downloaded-show branch remains separate.
+
+Connecting completes the initial play/select command before enabling the local
+speaker and automatic idle advancement. The idle effect reads the latest
+accepted snapshot, preventing a stale idle render from advancing past a song
+that just started. Regression tests cover late renewals, permanent ownership,
+concurrent claims, old replies, intentional takeovers, long song/MC sequences,
+poll drift, and heartbeat failures. A local 300-person load test exercises queue
+and API concurrency; it is not a deployed capacity certification.

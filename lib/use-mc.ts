@@ -1,6 +1,7 @@
 'use client';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {mcTrackPlan, mcSpecialPlan, type McPlan, type McKind} from './mc';
+import {releaseUnusedMediaUrls} from './media-urls';
 import {nextSelection} from './playback';
 
 export type ReadyMc = {id: string; context: string; text: string; url: string; order: number};
@@ -51,7 +52,7 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
           // callouts. Do not evict the currently playing recording during edits.
           if (retired.current.size > 420) for (const old of retired.current) {
             if (retired.current.size <= 400) break;
-            if (old === url || [...document.querySelectorAll('audio')].some(a => a.src === old && !a.paused)) continue;
+            if (old === url || [...document.querySelectorAll('audio')].some(a => (a.src === old || a.currentSrc === old))) continue;
             for (const [context, value] of cache.current) if (value.url === old) cache.current.delete(context);
             for (const [id, value] of recordings.current) if (value.url === old) recordings.current.delete(id);
             URL.revokeObjectURL(old);retired.current.delete(old);
@@ -65,7 +66,7 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
   }, [eventId, voice, request]);
   useEffect(() => {
     cache.current.clear();recordings.current.clear();inFlight.current.clear();setStatus('');
-    return () => {for (const url of retired.current) URL.revokeObjectURL(url);retired.current.clear();};
+    return () => {releaseUnusedMediaUrls(retired.current, document.querySelectorAll('audio'), url => URL.revokeObjectURL(url));};
   }, [eventId, voice]);
   const enabled = admin && snapshot?.isOwner && snapshot.speechAvailable;
   const catalogKey = snapshot ? JSON.stringify([snapshot.event.artist, snapshot.event.album, snapshot.event.title, snapshot.event.mc_enabled, snapshot.event.intro_enabled, snapshot.event.intro_text, snapshot.event.outro_enabled, snapshot.event.outro_text, snapshot.tracks.map((t: any) => [t.id, t.title, t.position, t.mc_text, t.mc_intro_text])]) : '';

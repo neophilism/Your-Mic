@@ -6,7 +6,7 @@ import {mcPlan,mcSpecialPlan,mcTrackPlan,MC_TEXT_LIMIT} from './mc';
 import {prepareMc,speechAvailable,speechProfile} from './mc-storage';
 const consent='Notify me by email when this album is available on streaming platforms.';
 const json=(v:any,status=200)=>Response.json(v,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-const fail=(s:number,m:string):never=>{throw Object.assign(new Error(m),{status:s});};
+const fail=(s:number,m:string,code?:string):never=>{throw Object.assign(new Error(m),{status:s,code});};
 const text=(v:any,max=120)=>String(v??'').trim().slice(0,max);
 async function hash(v:string){const a=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v));return Array.from(new Uint8Array(a),x=>x.toString(16).padStart(2,'0')).join('');}
 const db=()=>{if(!env.DB)fail(503,'Storage is not ready. Try again shortly.');return env.DB!;};
@@ -31,14 +31,14 @@ async function snapshot(id:string,r:Request){
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
   const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
-  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{artistStorageKey:await hash('artist:'+owner_id),localSession:local_session_id,localSequence:local_sequence,speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,mcVoiceKey:speechProfile(env).key,mcExpressivity:speechProfile(env).expressivity,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&(!!local_session_id||e.controller_until>Date.now())};
+  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{artistStorageKey:await hash('artist:'+owner_id),localSession:local_session_id,localSequence:local_sequence,speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,mcVoiceKey:speechProfile(env).key,mcExpressivity:speechProfile(env).expressivity,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere};
 }
 async function localControl(e:any,b:any,r:Request,ch:string,now:number){
   const validId=(v:any)=>typeof v==='string'&&/^[a-f0-9-]{36}$/i.test(v);
   if(b.action==='local-start'){
     if(!validId(b.localSession))fail(400,'A local show session is required.');
     if(e.local_session_id){if(e.controller_hash===ch&&e.local_session_id===b.localSession)return json(await snapshot(e.id,r));fail(409,'A downloaded show is reserved on another tab or device. Stop it there before switching.');}
-    if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now)fail(409,'Stop the current speaker device before starting local playback here.');
+    if(e.controller_hash&&e.controller_hash!==ch)fail(409,'Stop the current speaker device before starting local playback here.');
     const same=e.controller_hash===ch;
     const position=same&&b.playbackId===e.playback_id&&Number.isFinite(b.position)&&b.position>=0&&b.position<=7200?b.position:Math.max(0,e.position||0);
     const claimed=await run("UPDATE events SET local_session_id=?,local_sequence=0,controller_hash=?,controller_until=?,status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=? AND local_session_id=''",b.localSession,ch,now+45000,position,e.id,e.version);
@@ -125,15 +125,17 @@ async function control(e:any,b:any,r:Request){
   if(e.local_session_id)fail(409,'This show is playing from saved audio. End local playback on its reserved device before switching.');
   const reportedPosition=typeof b.position==='number'&&Number.isFinite(b.position)&&b.position>=0&&b.position<=7200&&typeof b.playbackId==='string'&&b.playbackId===e.playback_id?b.position:null;
   if(b.action==='claim'){
-    if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now&&!b.force)fail(409,'Another device controls the speaker. Use “Take over speaker” if you intend to switch devices.');
+    if(e.controller_hash&&e.controller_hash!==ch&&b.force!==true)fail(409,'Another device controls the speaker. Use “Take over speaker” if you intend to switch devices.');
     // A new controller starts paused, so two devices never intentionally play at once.
     const switching=e.controller_hash!==ch;
-    const resumePosition=!switching&&reportedPosition!==null?reportedPosition:e.controller_until<now?Math.max(0,e.position||0):playbackPosition(e,now);
-    const claimed=await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=?',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,resumePosition,e.status==='playing'&&!switching?now:null,e.id,e.version);
+    const resumePosition=!switching&&reportedPosition!==null?reportedPosition:Math.max(0,e.position||0);
+    const claimed=await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=? AND (?=1 OR controller_hash IS NULL OR controller_hash=?)',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,resumePosition,e.status==='playing'&&!switching?now:null,e.id,e.version,b.force===true?1:0,ch);
     if(!claimed.meta.changes)fail(409,'Playback changed while connecting. Try again.');
     return json(await snapshot(e.id,r));
   }
-  if(e.controller_hash!==ch||e.controller_until<now)fail(409,'Connect this device to the speaker first.');
+  // Controller ownership has no timeout. Only an explicit takeover can
+  // replace an existing controller; heartbeat timing never revokes ownership.
+  if(e.controller_hash!==ch)fail(409,'Speaker control moved to another device.','speaker_taken_over');
   if(b.action==='heartbeat'){
     // A late heartbeat may renew this controller's lease, but its playhead can
     // never overwrite a newer song or announcement instance.
@@ -141,7 +143,7 @@ async function control(e:any,b:any,r:Request){
       ?await run("UPDATE events SET controller_until=?,position=?,started_at=? WHERE id=? AND controller_hash=? AND playback_id=? AND status='playing'",now+45000,reportedPosition,now,e.id,ch,e.playback_id)
       :null;
     if(!renewed?.meta.changes)renewed=await run('UPDATE events SET controller_until=? WHERE id=? AND controller_hash=?',now+45000,e.id,ch);
-    if(!renewed.meta.changes)fail(409,'Speaker control moved to another device.');
+    if(!renewed.meta.changes)fail(409,'Speaker control moved to another device.','speaker_taken_over');
     return json({ok:true,controllerUntil:now+45000,serverNow:now});
   }
   if(!['play','pause','next','select','finish-announcement','end'].includes(b.action))fail(400,'Unknown playback action.');
@@ -153,6 +155,7 @@ async function control(e:any,b:any,r:Request){
     const result=await run("UPDATE events SET announcement_id=NULL,announcement_kind=NULL,status=?,position=0,started_at=?,playback_id=?,version=version+1 WHERE id=? AND version=?",e.current_track?'playing':'idle',e.current_track?now:null,crypto.randomUUID(),e.id,e.version);
     if(!result.meta.changes)fail(409,'Playback changed.');return json(await snapshot(e.id,r));
   }
+  if(b.action==='play'&&b.playbackId&&b.playbackId!==e.playback_id)fail(409,'That audio already changed. Refreshing speaker state.');
   if(b.action==='pause'){
     if(b.playbackId&&b.playbackId!==e.playback_id)fail(409,'That audio already changed. Refreshing speaker state.');
     const result=await run("UPDATE events SET status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=?",reportedPosition??playbackPosition(e,now),e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
@@ -216,6 +219,21 @@ export async function api(r:Request){try{
   if(p[0]!=='events'||!p[1])fail(404,'Not found.');
   const id=p[1];
   if(p.length===2&&method==='GET')return json(await snapshot(id,r));
+  if(p[2]==='plays'&&p.length===3&&['GET','POST'].includes(method)){
+    if(method==='GET'){
+      await eventFor(id,r);
+      const tracks=await all("SELECT t.id,t.title,SUM(CASE WHEN p.kind IN ('live','rap') THEN 1 ELSE 0 END) AS livePlays,SUM(CASE WHEN p.kind='rap' THEN 1 ELSE 0 END) AS rapPlays,SUM(CASE WHEN p.kind='preview' THEN 1 ELSE 0 END) AS privatePlays FROM tracks t LEFT JOIN track_plays p ON p.track_id=t.id AND p.event_id=t.event_id WHERE t.event_id=? GROUP BY t.id ORDER BY t.position,t.id",id);
+      return json({tracks,totalLivePlays:tracks.reduce((sum,t)=>sum+Number(t.livePlays),0),totalRapPlays:tracks.reduce((sum,t)=>sum+Number(t.rapPlays),0),totalPrivatePlays:tracks.reduce((sum,t)=>sum+Number(t.privatePlays),0)});
+    }
+    const b=await body(r),uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+    if(typeof b.playbackId!=='string'||typeof b.trackId!=='string'||!uuid.test(b.playbackId)||!uuid.test(b.trackId)||!['live','rap','preview'].includes(b.kind))fail(400,'Invalid play report.');
+    if(b.kind==='preview'){await eventFor(id);await guest(r);}else await eventFor(id,r);
+    if(!await first('SELECT id FROM tracks WHERE id=? AND event_id=?',b.trackId,id))fail(404,'Track not found.');
+    // Accept delayed reports; retries must survive a changed song or lease.
+    // This isolated write never changes transport, queue, clock or speaker state.
+    await run('INSERT OR IGNORE INTO track_plays(event_id,playback_id,track_id,kind,played_at) VALUES(?,?,?,?,?)',id,b.playbackId,b.trackId,b.kind,Date.now());
+    return json({ok:true});
+  }
   if(p[2]==='qr'&&method==='GET'){
     await eventFor(id);const link=`${u.origin}/?event=${encodeURIComponent(id)}`;
     const svg=SVG.render(QRCode.create(link,{errorCorrectionLevel:'M'}),{margin:3,width:600,color:{dark:'#10130f',light:'#ffffff'}});
@@ -325,5 +343,5 @@ export async function api(r:Request){try{
     await bucket().delete([t.audio_key,...(t.beat_key?[t.beat_key]:[])]);return json(await snapshot(id,r));
   }
   fail(404,'Not found.');
-}catch(error:any){if(!error.status)console.error('Your Mic API error',error);return json({error:error.status?error.message:'Something went wrong. Please try again.'},error.status||500);}}
+}catch(error:any){if(!error.status)console.error('Your Mic API error',error);return json({error:error.status?error.message:'Something went wrong. Please try again.',...(error.code?{code:error.code}:{})},error.status||500);}}
 

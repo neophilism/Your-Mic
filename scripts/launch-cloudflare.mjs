@@ -61,5 +61,19 @@ if(process.env.DEEPGRAM_API_KEY?.trim()){
   console.log(`Miles synthesis check passed (expressivity ${MILES_EXPRESSIVITY}, ${bytes.byteLength} audio bytes).`);
 }
 await verifyHostedAudio(resources.url,cookie);
+const artistEvents=await fetch(resources.url+'/api/mine',{headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});
+if(!artistEvents.ok)throw Error('Could not verify artist play counts.');
+const countEvent=(await artistEvents.json()).events?.[0];
+if(countEvent){
+  const countUrl=resources.url+'/api/events/'+encodeURIComponent(countEvent.id)+'/plays';
+  const counts=await fetch(countUrl,{headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});
+  if(!counts.ok)throw Error('Artist play counts did not pass the deployed storage check.');
+  const totals=await counts.json();
+  if(!Array.isArray(totals.tracks)||!['totalLivePlays','totalPrivatePlays','totalRapPlays'].every(key=>Number.isInteger(totals[key])&&totals[key]>=0)||totals.totalRapPlays>totals.totalLivePlays)throw Error('Invalid deployed play counts.');
+  const publicCounts=await fetch(countUrl,{signal:AbortSignal.timeout(10000)});
+  if(publicCounts.status!==401)throw Error('Play counts privacy check failed.');
+  console.log('Artist play counts passed: deployed storage and anonymous read protection (read-only checks).');
+}
+
 console.log(`Your Mic is live and its health and artist sign-in checks passed: ${resources.url}`);
 if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,`## Your Mic deployed\n\n[Open Your Mic](${resources.url}) · [Artist studio](${resources.url}/admin)\n\nHealth and artist-session checks passed. Create/upload the event and rehearse with phones and the speaker before sharing its new QR code.\n`);
