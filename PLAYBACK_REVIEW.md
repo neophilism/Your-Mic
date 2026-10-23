@@ -110,3 +110,15 @@ was 201 ms, with no seeks, unexpected pauses or media errors. This measures
 software handoff, not physical speaker latency or sample-accurate gaplessness.
 A second artist UI run paused and resumed during the already confirmed opening:
 112 ms handoff, one intended pause, zero seeks/errors, one finish request.
+
+## Per-song rap request availability
+
+The new artist checkbox updates only `tracks.rap_allowed`. It does not change
+the event, its version, audio source/revision, playlist order or current decoder.
+All tracks default to enabled. New rap queue inserts recheck eligibility in
+the same SQL statement; old audience pages cannot bypass the setting.
+Existing turns, playlist playback and private audio/range reads stay available.
+An actual artist UI browser check toggled eligibility off and back on during
+native playback: zero pauses/seeks and an unchanged playback ID/version.
+API tests cover ownership, stale/direct joins, re-enable, audio reads, playlist
+inclusion and preservation of already queued performers.

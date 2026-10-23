@@ -43,6 +43,13 @@
       "when": 1792784137297,
       "tag": "0005_track_plays",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792788418316,
+      "tag": "0006_track_rap_requests",
+      "breakpoints": true
     }
   ]
 }

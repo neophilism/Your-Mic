@@ -300,3 +300,16 @@ If the confirmation cannot complete before the introduction ends, the player
 retains guarded server reconciliation rather than guessing or skipping a song.
 This is an optimization of the normal online player; persistent offline
 playback stays on the separate development branch.
+
+
+## Allow rap requests per song
+
+Artist studio → Show controls → each song's **Allow rap requests** checkbox.
+All existing and newly uploaded tracks start checked. Unchecking a song
+changes only whether new crowd rap requests may select it. It remains in
+playlist playback, direct artist selection and private listening. The crowd
+sees **Listen only**. The API also rejects stale/direct requests, including
+a change racing with queue insertion. Re-checking immediately allows new
+requests again. Existing queued/playing turns remain intact; the artist can
+remove a waiting entry separately if needed. The setting does not change
+transport, audio files, playlist order, playback IDs or the event version.
