@@ -92,3 +92,21 @@ phone call, output-route change, disconnected speaker or exhausted battery
 can interrupt audio. A website cannot guarantee those away. Rehearse on the
 actual phone/browser/speaker, including an MC boundary and a queued performer,
 using the deployed release before leaving. Avoid deployments during the show.
+
+## Follow-up: introduction-to-music gap
+
+The old opening-to-music path waited for a finish-announcement response after
+the voice ended. The follow-up downloads music before its opening and confirms
+the selected music during speech. Early server snapshots cannot cut speech
+short; native completion releases the buffered song at position zero. A fast
+server path avoids unnecessary catalog and queue reads for that fixed handoff.
+Heartbeat/pause positions remain zero for music that has not started, and a
+pending Resume acknowledgement survives the change of playback ID.
+
+A native browser rehearsal through the actual artist UI used a real cached
+Miles clip from the production event, an injected three-second server response
+and three-second song-download delay. The measured end-of-clip to music gap
+was 201 ms, with no seeks, unexpected pauses or media errors. This measures
+software handoff, not physical speaker latency or sample-accurate gaplessness.
+A second artist UI run paused and resumed during the already confirmed opening:
+112 ms handoff, one intended pause, zero seeks/errors, one finish request.
