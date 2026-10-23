@@ -40,7 +40,8 @@ async function control(e:any,b:any,r:Request){
     if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now&&!b.force)fail(409,'Another device controls the speaker. Use “Take over speaker” if you intend to switch devices.');
     // A new controller starts paused, so two devices never intentionally play at once.
     const switching=e.controller_hash!==ch;
-    const claimed=await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=?',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,!switching&&reportedPosition!==null?reportedPosition:playbackPosition(e,now),e.status==='playing'&&!switching?now:null,e.id,e.version);
+    const resumePosition=!switching&&reportedPosition!==null?reportedPosition:e.controller_until<now?Math.max(0,e.position||0):playbackPosition(e,now);
+    const claimed=await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=?',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,resumePosition,e.status==='playing'&&!switching?now:null,e.id,e.version);
     if(!claimed.meta.changes)fail(409,'Playback changed while connecting. Try again.');
     return json(await snapshot(e.id,r));
   }
