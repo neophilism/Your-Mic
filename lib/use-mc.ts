@@ -88,5 +88,5 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
   useEffect(() => {if (admin && snapshot?.isOwner && snapshot.speechAvailable && snapshot.event.intro_enabled) prepare('intro');}, [admin, snapshot?.isOwner, snapshot?.speechAvailable, snapshot?.event.intro_enabled, snapshot?.event.intro_text, snapshot?.event.artist, snapshot?.event.album, snapshot?.event.title, prepare]);
   useEffect(() => {if (admin && snapshot?.isOwner && snapshot.speechAvailable && snapshot.event.outro_enabled) prepare('outro');}, [admin, snapshot?.isOwner, snapshot?.speechAvailable, snapshot?.event.outro_enabled, snapshot?.event.outro_text, snapshot?.event.artist, snapshot?.event.album, snapshot?.event.title, prepare]);
   const get = (plan: McPlan | null) => plan ? cache.current.get(plan.context) || null : null;
-  return {status, revision, prepare, get, special: (kind: 'intro' | 'outro') => get(current.current ? mcSpecialPlan(current.current.event, kind) : null), audioSrc: (id: string) => recordings.current.get(id)?.url || `/api/mc-audio/${id}`};
+  return {status, revision, prepare, get, readyClips: () => [...recordings.current.values()], special: (kind: 'intro' | 'outro') => get(current.current ? mcSpecialPlan(current.current.event, kind) : null), audioSrc: (id: string) => recordings.current.get(id)?.url || `/api/mc-audio/${id}`};
 }

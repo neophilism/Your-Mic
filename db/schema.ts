@@ -12,6 +12,7 @@ export const events = sqliteTable('events', {
   outroEnabled: integer('outro_enabled').notNull().default(0), outroText: text('outro_text').notNull().default(''),
   endAfterTrack: integer('end_after_track').notNull().default(0), showEnded: integer('show_ended').notNull().default(0),
   version: integer('version').notNull().default(0), controllerHash: text('controller_hash'), controllerUntil: integer('controller_until'),
+  localSessionId: text('local_session_id').notNull().default(''), localSequence: integer('local_sequence').notNull().default(0),
 }, t=>[index('events_owner').on(t.ownerId)]);
 export const tracks = sqliteTable('tracks', {
   id: text('id').primaryKey(), eventId: text('event_id').notNull().references(()=>events.id), title: text('title').notNull(),

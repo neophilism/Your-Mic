@@ -25,16 +25,60 @@ async function snapshot(id:string,r:Request){
   const token=r.headers.get('x-guest-token');const gh=token?await hash(token):'';
   const tracks=await all(`SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat${own?',mc_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
   const queue=await all("SELECT id,track_id,name,status,created_at,guest_hash FROM entries WHERE event_id=? AND status IN ('waiting','playing') ORDER BY created_at,id",id);
-  const {owner_id,controller_hash,intro_text,outro_text,...event}=e;
+  const {owner_id,controller_hash,intro_text,outro_text,local_session_id,local_sequence,...event}=e;
+  Object.assign(event,{local_playback:!!local_session_id});
   if(own)Object.assign(event,{intro_text,outro_text});
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
   const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
-  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&e.controller_until>Date.now()};
+  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{artistStorageKey:await hash('artist:'+owner_id),localSession:local_session_id,localSequence:local_sequence,speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&(!!local_session_id||e.controller_until>Date.now())};
+}
+async function localControl(e:any,b:any,r:Request,ch:string,now:number){
+  const validId=(v:any)=>typeof v==='string'&&/^[a-f0-9-]{36}$/i.test(v);
+  if(b.action==='local-start'){
+    if(!validId(b.localSession))fail(400,'A local show session is required.');
+    if(e.local_session_id){if(e.controller_hash===ch&&e.local_session_id===b.localSession)return json(await snapshot(e.id,r));fail(409,'A downloaded show is reserved on another tab or device. Stop it there before switching.');}
+    if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now)fail(409,'Stop the current speaker device before starting local playback here.');
+    const same=e.controller_hash===ch;
+    const position=same&&b.playbackId===e.playback_id&&Number.isFinite(b.position)&&b.position>=0&&b.position<=7200?b.position:Math.max(0,e.position||0);
+    const claimed=await run("UPDATE events SET local_session_id=?,local_sequence=0,controller_hash=?,controller_until=?,status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=? AND local_session_id=''",b.localSession,ch,now+45000,position,e.id,e.version);
+    if(!claimed.meta.changes)fail(409,'The show changed while starting local playback. Try again.');
+    return json(await snapshot(e.id,r));
+  }
+  if(b.action==='local-recover'){
+    if(b.confirmSpeakerStopped!==true)fail(400,'Stop audio on the original device before resetting its reservation.');
+    await run("UPDATE events SET local_session_id='',local_sequence=0,controller_hash=NULL,controller_until=0,status='paused',started_at=NULL,version=version+1 WHERE id=? AND local_session_id=?",e.id,e.local_session_id);
+    return json(await snapshot(e.id,r));
+  }
+  if(!e.local_session_id||e.local_session_id!==b.localSession||e.controller_hash!==ch)fail(409,'This device does not own the downloaded show.');
+  if(b.action==='local-release'){
+    const released=await run("UPDATE events SET local_session_id='',local_sequence=0,status='paused',started_at=NULL,controller_until=?,version=version+1 WHERE id=? AND local_session_id=? AND controller_hash=? AND local_sequence=?",now+45000,e.id,b.localSession,ch,b.sequence);
+    if(!released.meta.changes)fail(409,'Sync the stopped show before releasing this device.');
+    return json(await snapshot(e.id,r));
+  }
+  if(b.action!=='local-report')fail(400,'Unknown local playback action.');
+  if(!Number.isSafeInteger(b.sequence)||b.sequence<=0)fail(400,'Invalid local playback sequence.');
+  if(b.sequence<=e.local_sequence)return json(await snapshot(e.id,r));
+  const state=b.state||{},done=b.completedIds||[];
+  if(!['playing','paused','idle'].includes(state.status)||!['album','auto','mic'].includes(state.mode)||!Number.isFinite(state.position)||state.position<0||state.position>7200||!validId(state.playback_id)||!Array.isArray(done)||done.length>100||done.some(x=>!validId(x)))fail(400,'Invalid local playback state.');
+  const ts=await all('SELECT id FROM tracks WHERE event_id=?',e.id),hasTrack=(id:any)=>id===null||ts.some(t=>t.id===id);
+  if(!hasTrack(state.current_track)||!hasTrack(state.album_cursor)||!hasTrack(state.mic_after_track)||state.pending_mode!==null&&!['album','auto','mic'].includes(state.pending_mode))fail(400,'Local playback references an unavailable track or mode.');
+  if(state.current_entry&&!await first('SELECT id FROM entries WHERE id=? AND event_id=? AND track_id=?',state.current_entry,e.id,state.current_track))fail(400,'That performer is not queued for this track.');
+  if(state.announcement_id&&!await first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND state='ready'",state.announcement_id,e.id))fail(400,'That announcement is unavailable.');
+  if(state.announcement_id&&!['between','intro','outro'].includes(state.announcement_kind)||!state.current_track&&!state.announcement_id&&state.status==='playing'||done.includes(state.current_entry))fail(400,'Invalid local playback transition.');
+  const update=db().prepare('UPDATE events SET local_sequence=?,mode=?,pending_mode=?,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=?,started_at=?,controller_until=?,announcement_id=?,announcement_kind=?,intro_played=?,end_after_track=?,show_ended=?,queue_open=?,playback_id=?,version=version+1 WHERE id=? AND local_session_id=? AND controller_hash=? AND local_sequence<?').bind(b.sequence,state.mode,state.pending_mode,state.mic_after_track,state.status,state.current_track,state.current_entry,state.album_cursor,state.position,state.status==='playing'?now:null,now+45000,state.announcement_id||null,state.announcement_id?state.announcement_kind:null,state.intro_played?1:0,state.end_after_track?1:0,state.show_ended?1:0,state.queue_open?1:0,state.playback_id,e.id,b.localSession,ch,b.sequence);
+  const guard='EXISTS(SELECT 1 FROM events WHERE id=? AND local_session_id=? AND local_sequence=?)';
+  const statements=[update];
+  if(done.length)statements.push(db().prepare(`UPDATE entries SET status='done' WHERE event_id=? AND id IN (${done.map(()=>'?').join(',')}) AND status IN ('waiting','playing') AND ${guard}`).bind(e.id,...done,e.id,b.localSession,b.sequence));
+  if(state.current_entry)statements.push(db().prepare(`UPDATE entries SET status='playing' WHERE event_id=? AND id=? AND ${guard}`).bind(e.id,state.current_entry,e.id,b.localSession,b.sequence));
+  await db().batch(statements);
+  return json(await snapshot(e.id,r));
 }
 async function control(e:any,b:any,r:Request){
   const token=text(b.controller,80); if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Reconnect this speaker device.');
   const ch=await hash(token);const now=Date.now();
+  if(String(b.action).startsWith('local-'))return localControl(e,b,r,ch,now);
+  if(e.local_session_id)fail(409,'This show is playing from saved audio. End local playback on its reserved device before switching.');
   const reportedPosition=typeof b.position==='number'&&Number.isFinite(b.position)&&b.position>=0&&b.position<=7200&&typeof b.playbackId==='string'&&b.playbackId===e.playback_id?b.position:null;
   if(b.action==='claim'){
     if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now&&!b.force)fail(409,'Another device controls the speaker. Use “Take over speaker” if you intend to switch devices.');
@@ -168,13 +212,14 @@ export async function api(r:Request){try{
     else{
       const qs=await all("SELECT * FROM entries WHERE event_id=? AND status='waiting' ORDER BY created_at,id",id);
       let source=e;
-      if(b.trackId&&b.trackId!==e.current_track){if(!ts.some(t=>t.id===b.trackId))fail(404,'Track not found.');source={...e,current_track:b.trackId,current_entry:null,album_cursor:b.trackId,mode:'album',pending_mode:null,mic_after_track:null,end_after_track:0};}
+      if(b.trackId&&(b.offlinePlaylist||b.trackId!==e.current_track)){if(!ts.some(t=>t.id===b.trackId))fail(404,'Track not found.');source={...e,current_track:b.trackId,current_entry:null,album_cursor:b.trackId,mode:'album',pending_mode:null,mic_after_track:null,end_after_track:0};}
       plan=mcPlan(source,ts,nextSelection(source,ts,qs));
     }
     return json(plan?await prepareMc(env,id,plan):{state:'idle'});
   }
   if(p.length===2&&method==='PATCH'){
     const b=await body(r);
+    if(e.local_session_id&&(b.action||b.queueOpen!==undefined))fail(409,'Use the reserved local playback device to change the show controls.');
     if(b.action==='mode'){
       if(!['album','mic','auto'].includes(b.mode))fail(400,'Choose album or Your Mic.');
       const pending=!!e.current_track;
@@ -188,6 +233,7 @@ export async function api(r:Request){try{
     return json(await snapshot(id,r));
   }
   if(p[2]==='control'&&method==='POST')return await control(e,await body(r),r);
+  if(p[2]==='tracks'&&e.local_session_id&&method!=='GET')fail(409,'End local playback before changing downloaded tracks or beats.');
   if(p[2]==='subscribers'&&method==='GET'){
     const rows=await all('SELECT email,created_at,consent FROM subscribers WHERE event_id=? ORDER BY created_at',id);
     if(u.searchParams.get('format')!=='csv')return json({count:rows.length});
