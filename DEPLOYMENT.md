@@ -154,3 +154,17 @@ Miles belongs to **Deepgram Flux TTS**, model `flux-miles-en`, not Cloudflare's 
 Until the key exists, the studio shows **Zeus · Miles setup pending** and retains working Cloudflare speech. A failed configured Flux request does not silently change voices; prior safe recordings can play, or the announcement is skipped so music continues.
 
 Reference: https://developers.deepgram.com/docs/flux-tts/voices and https://developers.deepgram.com/reference/speak/v-2/audio/generate .
+
+## Playback continuity
+
+The speaker uses complete, buffered audio files. Current-song downloading finishes before sound starts, and the next selection downloads in advance. Only current/next files and a file being replaced are retained; audio object URLs are released when no longer needed. Crowd headphone previews continue using streaming audio.
+
+The speaker audio decoder is the authority for its playhead. Polling, late API replies and MC preparation never seek a running song to a server clock. A song starts at zero after download; an explicit resume/takeover position is applied once. Each track/announcement instance has a separate `playback_id`, including repeats of the same song. Old heartbeats and late media loads cannot reset a newer instance. Pause and reconnect report the actual decoded position.
+
+A single failed heartbeat no longer pauses audio. Buffered playback continues while the app retries, up to the existing 45-second speaker lease. An explicit takeover, authentication rejection or expired lease still stops the old controller. The screen should remain awake; device output changes, Bluetooth faults and operating-system interruptions remain outside the website's control.
+
+Regression coverage includes delayed loads, large server-clock drift, repeated snapshots, pause/resume, same-track repeat, MC boundaries, stale downloads, truncated audio, stale heartbeat positions, lease ownership and optional public record labels. When `DEEPGRAM_API_KEY` is supplied, deployment also synthesizes a short Miles sound check with the real provider and discards that test recording.
+
+## Record label credit
+
+**New event** and **Edit event** include an optional **Record label** field. When supplied, the label appears below the event's artist/album information for both artists and audience members. Existing events keep an empty label until edited; tracks and release signups are preserved.

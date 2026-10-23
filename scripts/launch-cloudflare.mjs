@@ -46,5 +46,16 @@ const cookie=login.headers.get('set-cookie')?.split(';')[0];
 if(!cookie)throw Error('The artist sign-in did not return a session cookie.');
 const me=await fetch(resources.url+'/api/me',{headers:{Cookie:cookie},signal:AbortSignal.timeout(10000)});
 if(!me.ok||(await me.json()).signedIn!==true)throw Error('The deployed artist session check failed.');
+if(process.env.DEEPGRAM_API_KEY?.trim()){
+  // Verify the real credential/model without logging the key or saving test
+  // audio into a live event. This is one short, synthetic synthesis request.
+  const speech=await fetch('https://api.deepgram.com/v2/speak?model=flux-miles-en&encoding=mp3',{
+    method:'POST',headers:{Authorization:`Token ${process.env.DEEPGRAM_API_KEY.trim()}`,'Content-Type':'application/json'},
+    body:JSON.stringify({text:'Your Mic sound check.'}),signal:AbortSignal.timeout(30000),
+  });
+  if(!speech.ok||!(speech.headers.get('content-type')||'').startsWith('audio/'))throw Error(`Miles synthesis check failed (HTTP ${speech.status}). Check the Deepgram key permissions and available credits.`);
+  const bytes=await speech.arrayBuffer();if(bytes.byteLength<32)throw Error('Miles synthesis returned no playable audio.');
+  console.log(`Miles synthesis check passed (${bytes.byteLength} audio bytes).`);
+}
 console.log(`Your Mic is live and its health and artist sign-in checks passed: ${resources.url}`);
 if(process.env.GITHUB_STEP_SUMMARY)await appendFile(process.env.GITHUB_STEP_SUMMARY,`## Your Mic deployed\n\n[Open Your Mic](${resources.url}) · [Artist studio](${resources.url}/admin)\n\nHealth and artist-session checks passed. Create/upload the event and rehearse with phones and the speaker before sharing its new QR code.\n`);

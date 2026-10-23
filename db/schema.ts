@@ -1,7 +1,7 @@
 import { sqliteTable, text, integer, real, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
 export const events = sqliteTable('events', {
   id: text('id').primaryKey(), ownerId: text('owner_id').notNull(), title: text('title').notNull(),
-  artist: text('artist').notNull(), album: text('album').notNull().default(''), location: text('location').notNull().default(''),
+  artist: text('artist').notNull(), recordLabel: text('record_label').notNull().default(''), playbackId: text('playback_id').notNull().default(''), album: text('album').notNull().default(''), location: text('location').notNull().default(''),
   queueOpen: integer('queue_open').notNull().default(1), createdAt: integer('created_at').notNull(),
   mode: text('mode').notNull().default('album'), pendingMode: text('pending_mode'), micAfterTrack: text('mic_after_track'),
   status: text('status').notNull().default('idle'), currentTrack: text('current_track'), currentEntry: text('current_entry'),

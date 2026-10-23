@@ -23,34 +23,46 @@ async function guest(r:Request){const token=r.headers.get('x-guest-token')||'';i
 async function snapshot(id:string,r:Request){
   const e=await eventFor(id);const own=uid(r)===e.owner_id;
   const token=r.headers.get('x-guest-token');const gh=token?await hash(token):'';
-  const tracks=await all(`SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat${own?',mc_text':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
+  const tracks=await all(`SELECT id,title,position,duration,beat_duration,beat_key IS NOT NULL AS hasBeat${own?',mc_text,audio_key AS audioRevision,beat_key AS beatRevision':''} FROM tracks WHERE event_id=? ORDER BY position,id`,id);
   const queue=await all("SELECT id,track_id,name,status,created_at,guest_hash FROM entries WHERE event_id=? AND status IN ('waiting','playing') ORDER BY created_at,id",id);
   const {owner_id,controller_hash,intro_text,outro_text,...event}=e;
   if(own)Object.assign(event,{intro_text,outro_text});
   const announcement=e.announcement_id?await first('SELECT text FROM mc_clips WHERE id=?',e.announcement_id):null;
   const lastTurn=gh?await first("SELECT entries.id,entries.name,tracks.title AS trackTitle FROM entries JOIN tracks ON tracks.id=entries.track_id WHERE entries.event_id=? AND entries.guest_hash=? AND entries.status='done' ORDER BY entries.created_at DESC,entries.id DESC LIMIT 1",id,gh):null;
-  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),speakerHere:own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'')&&e.controller_until>Date.now()};
+  const speakerOwnedHere=own&&!!controller_hash&&controller_hash===await hash(r.headers.get('x-controller-token')||'');
+  return {event,tracks,lastTurn,announcementText:announcement?.text||null,...(own?{speechAvailable:speechAvailable(env),mcVoice:speechProfile(env).label,milesReady:!!env.DEEPGRAM_API_KEY?.trim()}:{}),queue:queue.map(({guest_hash,...q}:any)=>({...q,mine:guest_hash===gh})),isOwner:own,serverNow:Date.now(),...(own?{speakerOwnedHere}:{}),speakerHere:speakerOwnedHere&&e.controller_until>Date.now()};
 }
 async function control(e:any,b:any,r:Request){
   const token=text(b.controller,80); if(!/^[a-f0-9-]{36}$/i.test(token))fail(400,'Reconnect this speaker device.');
   const ch=await hash(token);const now=Date.now();
+  const reportedPosition=typeof b.position==='number'&&Number.isFinite(b.position)&&b.position>=0&&b.position<=7200&&typeof b.playbackId==='string'&&b.playbackId===e.playback_id?b.position:null;
   if(b.action==='claim'){
     if(e.controller_hash&&e.controller_hash!==ch&&e.controller_until>now&&!b.force)fail(409,'Another device controls the speaker. Use “Take over speaker” if you intend to switch devices.');
     // A new controller starts paused, so two devices never intentionally play at once.
     const switching=e.controller_hash!==ch;
-    await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=?',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,playbackPosition(e,now),e.status==='playing'&&!switching?now:null,e.id,e.version);
+    const claimed=await run('UPDATE events SET controller_hash=?,controller_until=?,status=?,position=?,started_at=?,version=version+1 WHERE id=? AND version=?',ch,now+45000,switching&&e.status==='playing'?'paused':e.status,!switching&&reportedPosition!==null?reportedPosition:playbackPosition(e,now),e.status==='playing'&&!switching?now:null,e.id,e.version);
+    if(!claimed.meta.changes)fail(409,'Playback changed while connecting. Try again.');
     return json(await snapshot(e.id,r));
   }
   if(e.controller_hash!==ch||e.controller_until<now)fail(409,'Connect this device to the speaker first.');
-  if(b.action==='heartbeat'){await run('UPDATE events SET controller_until=? WHERE id=? AND controller_hash=?',now+45000,e.id,ch);return json({ok:true});}
+  if(b.action==='heartbeat'){
+    // A late heartbeat may renew this controller's lease, but its playhead can
+    // never overwrite a newer song or announcement instance.
+    let renewed=reportedPosition!==null&&e.status==='playing'
+      ?await run("UPDATE events SET controller_until=?,position=?,started_at=? WHERE id=? AND controller_hash=? AND playback_id=? AND status='playing'",now+45000,reportedPosition,now,e.id,ch,e.playback_id)
+      :null;
+    if(!renewed?.meta.changes)renewed=await run('UPDATE events SET controller_until=? WHERE id=? AND controller_hash=?',now+45000,e.id,ch);
+    if(!renewed.meta.changes)fail(409,'Speaker control moved to another device.');
+    return json({ok:true,controllerUntil:now+45000,serverNow:now});
+  }
   if(!['play','pause','next','select','finish-announcement','end'].includes(b.action))fail(400,'Unknown playback action.');
   if(b.action==='finish-announcement'||(b.action==='next'&&e.announcement_id)){
     if(!e.announcement_id||Number(b.version)!==e.version||b.action==='finish-announcement'&&b.announcementId!==e.announcement_id)fail(409,'This announcement already changed.');
-    const result=await run("UPDATE events SET announcement_id=NULL,announcement_kind=NULL,status=?,position=0,started_at=?,version=version+1 WHERE id=? AND version=?",e.current_track?'playing':'idle',e.current_track?now:null,e.id,e.version);
+    const result=await run("UPDATE events SET announcement_id=NULL,announcement_kind=NULL,status=?,position=0,started_at=?,playback_id=?,version=version+1 WHERE id=? AND version=?",e.current_track?'playing':'idle',e.current_track?now:null,crypto.randomUUID(),e.id,e.version);
     if(!result.meta.changes)fail(409,'Playback changed.');return json(await snapshot(e.id,r));
   }
   if(b.action==='pause'){
-    const result=await run("UPDATE events SET status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=?",playbackPosition(e,now),e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
+    const result=await run("UPDATE events SET status='paused',position=?,started_at=NULL,version=version+1 WHERE id=? AND version=?",reportedPosition??playbackPosition(e,now),e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
   } else if(b.action==='play'&&(e.current_track||e.announcement_id)){
     const result=await run("UPDATE events SET status='playing',started_at=?,controller_until=?,version=version+1 WHERE id=? AND version=?",now,now+45000,e.id,e.version);if(!result.meta.changes)fail(409,'Playback changed. Try again.');
   } else {
@@ -68,7 +80,7 @@ async function control(e:any,b:any,r:Request){
     const plan=ending?(e.outro_enabled?mcSpecialPlan(e,'outro'):null):starting?(e.intro_enabled?mcSpecialPlan(e,'intro'):null):b.action==='next'?mcPlan(e,ts,pick):null;
     const clip=b.mcClipId&&plan?await first("SELECT id FROM mc_clips WHERE id=? AND event_id=? AND context=? AND state='ready'",b.mcClipId,e.id,plan.context):null;
     const newVersion=e.version+1;
-    const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=? WHERE id=? AND version=? AND (? IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,clip?plan!.kind:null,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
+    const update=db().prepare("UPDATE events SET mode=?,pending_mode=NULL,mic_after_track=?,status=?,current_track=?,current_entry=?,album_cursor=?,position=0,started_at=?,controller_until=?,version=?,announcement_id=?,announcement_kind=?,end_after_track=0,show_ended=?,queue_open=?,intro_played=?,playback_id=? WHERE id=? AND version=? AND (? IS NULL OR EXISTS(SELECT 1 FROM entries WHERE id=? AND status='waiting'))").bind(pick.mode,e.mic_after_track===e.current_track?null:e.mic_after_track,pick.track||clip?'playing':'idle',pick.track?.id||null,pick.entry?.id||null,pick.cursor,pick.track||clip?now:null,now+45000,newVersion,clip?.id||null,clip?plan!.kind:null,ending?1:0,ending?0:e.queue_open,ending?0:starting?1:e.intro_played,crypto.randomUUID(),e.id,e.version,pick.entry?.id||null,pick.entry?.id||null);
     const statements=[update];
     if(e.current_entry)statements.push(db().prepare("UPDATE entries SET status='done' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry IS NOT ?)").bind(e.current_entry,e.id,newVersion,e.current_entry));
     if(pick.entry)statements.push(db().prepare("UPDATE entries SET status='playing' WHERE id=? AND EXISTS(SELECT 1 FROM events WHERE id=? AND version=? AND current_entry=?)").bind(pick.entry.id,e.id,newVersion,pick.entry.id));
@@ -81,14 +93,14 @@ export async function api(r:Request){try{
   if(method!=='GET'&&method!=='HEAD')originCheck(r);
   if(p[0]==='me')return json({signedIn:!!uid(r),name:r.headers.get('oai-authenticated-user-email')||''});
   if(p[0]==='events'&&p.length===1){
-    if(method==='GET')return json({events:await all('SELECT id,title,artist,album,location,created_at,queue_open FROM events ORDER BY created_at DESC LIMIT 30')});
+    if(method==='GET')return json({events:await all('SELECT id,title,artist,album,record_label,location,created_at,queue_open FROM events ORDER BY created_at DESC LIMIT 30')});
     if(method==='POST'){
       const owner=auth(r);const b=await body(r);if(!text(b.title)||!text(b.artist))fail(400,'Add an event name and artist.');
       if((await first('SELECT COUNT(*) AS n FROM events WHERE owner_id=?',owner)).n>=50)fail(400,'You have reached the 50-event limit.');
-      const id=crypto.randomUUID();await run('INSERT INTO events(id,owner_id,title,artist,album,location,created_at) VALUES(?,?,?,?,?,?,?)',id,owner,text(b.title),text(b.artist),text(b.album),text(b.location),Date.now());return json({id},201);
+      const id=crypto.randomUUID();await run('INSERT INTO events(id,owner_id,title,artist,album,record_label,location,created_at) VALUES(?,?,?,?,?,?,?,?)',id,owner,text(b.title),text(b.artist),text(b.album),text(b.recordLabel),text(b.location),Date.now());return json({id},201);
     }
   }
-  if(p[0]==='mine'){const owner=auth(r);return json({events:await all('SELECT id,title,artist,album,location,created_at FROM events WHERE owner_id=? ORDER BY created_at DESC',owner)});}
+  if(p[0]==='mine'){const owner=auth(r);return json({events:await all('SELECT id,title,artist,album,record_label,location,created_at FROM events WHERE owner_id=? ORDER BY created_at DESC',owner)});}
   if(p[0]==='mc-audio'&&p[1]&&['GET','HEAD'].includes(method)){
     const clip=await first("SELECT audio_key FROM mc_clips WHERE id=? AND state='ready'",p[1]);if(!clip?.audio_key)fail(404,'Announcement not found.');
     const meta=await bucket().head(clip.audio_key);if(!meta)fail(404,'Announcement not found.');
@@ -170,7 +182,7 @@ export async function api(r:Request){try{
       if(b.trackId&&!await first('SELECT id FROM tracks WHERE id=? AND event_id=?',b.trackId,id))fail(404,'Track not found.');
       await run('UPDATE events SET mic_after_track=?,version=version+1 WHERE id=?',b.trackId||null,id);
     }else{
-      await run('UPDATE events SET title=?,artist=?,album=?,location=?,queue_open=?,version=version+1 WHERE id=?',text(b.title)||e.title,text(b.artist)||e.artist,text(b.album??e.album),text(b.location??e.location),b.queueOpen===undefined?e.queue_open:b.queueOpen?1:0,id);
+      await run('UPDATE events SET title=?,artist=?,album=?,record_label=?,location=?,queue_open=?,version=version+1 WHERE id=?',text(b.title)||e.title,text(b.artist)||e.artist,text(b.album??e.album),text(b.recordLabel??e.record_label),text(b.location??e.location),b.queueOpen===undefined?e.queue_open:b.queueOpen?1:0,id);
     }
     return json(await snapshot(id,r));
   }

@@ -16,7 +16,7 @@ try{
  const guest={'x-guest-token':randomUUID()};const guest2={'x-guest-token':randomUUID()};const controller=randomUUID();const host={...owner,...guest,'x-controller-token':controller};
  async function req(path,method='GET',body,headers={},status=200){const r=new Request('https://your-mic.test/api/'+path,{method,headers:{...(body instanceof Uint8Array?{'X-Audio-Size':String(body.byteLength)}:{'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:body instanceof Uint8Array?body:JSON.stringify(body)})});const response=await mf.dispatchFetch(r.url,r);let d;if((response.headers.get('content-type')||'').includes('json'))d=await response.json();else d=await response.arrayBuffer();assert.equal(response.status,status,`${method} ${path}: ${JSON.stringify(d)}`);return d;}
  await req('events','POST',{title:'Denied',artist:'Nope'},{},401);
- const created=await req('events','POST',{title:'Test release',artist:'Test Artist',album:'Disc One'},owner,201);const base='events/'+created.id;
+ const created=await req('events','POST',{title:'Test release',artist:'Test Artist',album:'Disc One',recordLabel:'Unsealed Records'},owner,201);const base='events/'+created.id;
  const wav=new Uint8Array(16044);const v=new DataView(wav.buffer);for(const [o,s]of[[0,'RIFF'],[8,'WAVE'],[12,'fmt '],[36,'data']])for(let i=0;i<s.length;i++)wav[o+i]=s.charCodeAt(i);v.setUint32(4,wav.length-8,true);v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,8000,true);v.setUint32(28,16000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);v.setUint32(40,16000,true);
  let s=await req(base+'/tracks?filename=a.wav&title=Track+A&duration=1','POST',wav,owner,201);
  s=await req(base+'/tracks?filename=b.wav&title=Track+B&duration=1','POST',wav,owner,201);const [a,b]=s.tracks;
@@ -66,6 +66,31 @@ try{
  await req(base+'/control','POST',{action:'next',controller,version:outgoingVersion},host,409);
  await req(base+'/control','POST',{action:'select',controller,version:selectedVersion,trackId:b.id},host,409);
  assert.equal((await req(base,'GET')).event.current_track,a.id);
+ // The optional label is public, editable, and preserved by unrelated changes.
+ assert.equal((await req(base,'GET')).event.record_label,'Unsealed Records');
+ await req(base,'PATCH',{recordLabel:'New label'},owner);
+ assert.equal((await req(base,'GET')).event.record_label,'New label');
+ await req(base,'PATCH',{queueOpen:false},owner);
+ assert.equal((await req(base,'GET')).event.record_label,'New label');
+ assert.equal((await req('events','GET')).events.find(x=>x.id===created.id).record_label,'New label');
+ // Decoder position, not elapsed server time, anchors pause/reconnect. A late
+ // heartbeat cannot write the previous track's position into a new instance.
+ s=await req(base,'GET',undefined,host);
+ const playingId=s.event.playback_id;assert(playingId);
+ const heartbeat=await req(base+'/control','POST',{action:'heartbeat',controller,playbackId:playingId,position:17.25},host);
+ assert(heartbeat.controllerUntil>heartbeat.serverNow);
+ s=await req(base,'GET',undefined,host);assert.equal(s.event.position,17.25);
+ s=await req(base+'/control','POST',{action:'pause',controller,version:s.event.version,playbackId:playingId,position:18.5},host);
+ assert.equal(s.event.position,18.5);
+ s=await req(base+'/control','POST',{action:'play',controller,version:s.event.version},host);assert.equal(s.event.playback_id,playingId);
+ s=await req(base+'/control','POST',{action:'select',controller,version:s.event.version,trackId:b.id},host);
+ assert.notEqual(s.event.playback_id,playingId);assert.equal(s.event.position,0);
+ await req(base+'/control','POST',{action:'heartbeat',controller,playbackId:playingId,position:200},host);
+ assert.equal((await req(base,'GET',undefined,host)).event.position,0);
+ s=await req(base+'/control','POST',{action:'claim',controller,playbackId:s.event.playback_id,position:23.5},host);
+ assert.equal(s.event.position,23.5);assert.equal(s.speakerOwnedHere,true);
+ const withoutLabel=await req('events','POST',{title:'No label',artist:'Independent artist'},owner,201);
+ assert.equal((await req('events/'+withoutLabel.id,'GET')).event.record_label,'');
  console.log('Integration passed: event ownership, uploads, beat playback, QR, consent/export, anonymous queue, duplicate prevention, FIFO, all three modes, boundary changes, resume/repeat, completion, speaker lease, stale advances, seeking and reorder.');
 }finally{await mf.dispose();}
 

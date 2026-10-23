@@ -87,14 +87,6 @@ export function useMc(snapshot: any, admin: boolean, request: (path: string, opt
   }, [key, admin, snapshot?.isOwner, snapshot?.speechAvailable, prepare]);
   useEffect(() => {if (admin && snapshot?.isOwner && snapshot.speechAvailable && snapshot.event.intro_enabled) prepare('intro');}, [admin, snapshot?.isOwner, snapshot?.speechAvailable, snapshot?.event.intro_enabled, snapshot?.event.intro_text, snapshot?.event.artist, snapshot?.event.album, snapshot?.event.title, prepare]);
   useEffect(() => {if (admin && snapshot?.isOwner && snapshot.speechAvailable && snapshot.event.outro_enabled) prepare('outro');}, [admin, snapshot?.isOwner, snapshot?.speechAvailable, snapshot?.event.outro_enabled, snapshot?.event.outro_text, snapshot?.event.artist, snapshot?.event.album, snapshot?.event.title, prepare]);
-  // Ask the browser to warm the next music file while the current one plays.
-  useEffect(() => {
-    if (!admin || !snapshot?.speakerHere || !snapshot?.event.current_track || snapshot.event.show_ended) return;
-    const pick = nextSelection(snapshot.event, snapshot.tracks, snapshot.queue);
-    if (!pick.track) return;
-    const audio = new Audio(`/api/audio/${pick.track.id}${pick.entry ? '?beat=1' : ''}`);audio.preload = 'auto';audio.load();
-    return () => {audio.removeAttribute('src');audio.load();};
-  }, [key, admin, snapshot?.speakerHere, snapshot?.event.current_track, snapshot?.event.show_ended]);
   const get = (plan: McPlan | null) => plan ? cache.current.get(plan.context) || null : null;
   return {status, revision, prepare, get, special: (kind: 'intro' | 'outro') => get(current.current ? mcSpecialPlan(current.current.event, kind) : null), audioSrc: (id: string) => recordings.current.get(id)?.url || `/api/mc-audio/${id}`};
 }
