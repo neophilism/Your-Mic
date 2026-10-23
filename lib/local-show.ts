@@ -47,7 +47,7 @@ export class LocalShow {
     const playing = this.snapshot.queue.find((q: any) => q.id === current);
     this.snapshot.queue = remote.queue.filter((q: any) => !this.completed.has(q.id) && q.id !== current).map((q: any) => ({...q, status: 'waiting'}));
     if (current && playing) this.snapshot.queue.unshift({...playing, status: 'playing'});
-    Object.assign(this.snapshot, {serverNow: remote.serverNow, speechAvailable: remote.speechAvailable, mcVoice: remote.mcVoice, milesReady: remote.milesReady});
+    Object.assign(this.snapshot, {serverNow: remote.serverNow, speechAvailable: remote.speechAvailable, mcVoice: remote.mcVoice, mcVoiceKey: remote.mcVoiceKey, mcExpressivity: remote.mcExpressivity, milesReady: remote.milesReady});
     return this.snapshot;
   }
   patch(data: any) {

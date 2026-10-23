@@ -85,6 +85,8 @@ try{
  s=await req(base+'/control','POST',{action:'play',controller,version:s.event.version},host);assert.equal(s.event.playback_id,playingId);
  s=await req(base+'/control','POST',{action:'select',controller,version:s.event.version,trackId:b.id},host);
  assert.notEqual(s.event.playback_id,playingId);assert.equal(s.event.position,0);
+ await req(base+'/control','POST',{action:'pause',controller,playbackId:playingId,position:200},host,409);
+ assert.equal((await req(base,'GET',undefined,host)).event.status,'playing');
  await req(base+'/control','POST',{action:'heartbeat',controller,playbackId:playingId,position:200},host);
  assert.equal((await req(base,'GET',undefined,host)).event.position,0);
  s=await req(base+'/control','POST',{action:'claim',controller,playbackId:s.event.playback_id,position:23.5},host);

@@ -234,3 +234,28 @@ revision invalidation, offline looping and FIFO, poll/ack clock drift, resume,
 announcements, server reservation privacy/ownership, expired leases, stale
 reports, completion and safe release. Browser/hardware rehearsal remains
 required before promoting this branch to a live event.
+
+
+## High-energy Miles and audio handoffs
+
+Miles now uses Flux `expressivity=2`, the provider's maximum expressivity.
+The voice profile is part of each speech cache key, so calmer cached clips
+are retired and new announcements are generated at the new setting. The
+artist studio displays **Miles · Maximum energy**. Deepgram labels this
+control beta; audition the generated names/scripts before the event.
+
+The speaker waits for metadata before playing a new source. Aborted older
+play attempts and stale outgoing announcement errors cannot pause a new
+song; server pause requests with a stale playback ID are rejected. A transient
+browser AbortError retries the same loaded audio without reloading or seeking.
+Resume calls native playback directly from the button interaction when audio
+is already ready. Native decoder/download failures display specific messages.
+
+Full-file downloads bypass the browser HTTP cache, reject partial HTTP 206
+responses and Content-Range, and retry once before reporting a failure. Files
+are published to the speaker only after the complete response is received.
+Deployment checks synthesize and decode a real maximum-energy Miles sample
+and read/decode the first uploaded song when ffmpeg is available. These checks
+are read-only and do not change the live show or its queue.
+
+Reference: https://developers.deepgram.com/docs/tts-expressivity .

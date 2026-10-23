@@ -1,4 +1,5 @@
 import {MC_MODEL, MC_VOICE, MC_MILES_MODEL, type McPlan} from './mc';
+import {MILES_EXPRESSIVITY, MILES_VOICE_KEY, milesSpeechUrl} from './miles.mjs';
 
 type SpeechEnv = {DEEPGRAM_API_KEY?: string; DB?: D1Database; BUCKET?: R2Bucket; AI?: {run(model: string, input: Record<string, unknown>): Promise<ReadableStream>}; MC_CLOUDFLARE_ACCOUNT_ID?: string; MC_CLOUDFLARE_API_TOKEN?: string};
 export function speechAvailable(env: SpeechEnv) {
@@ -6,8 +7,8 @@ export function speechAvailable(env: SpeechEnv) {
 }
 export function speechProfile(env: SpeechEnv) {
   return env.DEEPGRAM_API_KEY?.trim()
-    ? {model: MC_MILES_MODEL, voice: 'miles', label: 'Miles', provider: 'deepgram'}
-    : {model: MC_MODEL, voice: MC_VOICE, label: 'Zeus', provider: 'cloudflare'};
+    ? {model: MC_MILES_MODEL, voice: 'miles', label: 'Miles', provider: 'deepgram', expressivity: MILES_EXPRESSIVITY, key: MILES_VOICE_KEY}
+    : {model: MC_MODEL, voice: MC_VOICE, label: 'Zeus', provider: 'cloudflare', expressivity: 0, key: MC_MODEL+':'+MC_VOICE};
 }
 async function digest(value: string) {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
@@ -16,7 +17,7 @@ async function digest(value: string) {
 
 export async function prepareMc(env: SpeechEnv, eventId: string, plan: McPlan) {
   const profile = speechProfile(env);
-  const id = await digest(JSON.stringify([eventId, profile.model, profile.voice, plan.context, plan.text]));
+  const id = await digest(JSON.stringify([eventId, profile.model, profile.voice, ...(profile.provider === 'deepgram' ? [profile.key] : []), plan.context, plan.text]));
   const db = env.DB!, bucket = env.BUCKET!;
   const find = () => db.prepare('SELECT * FROM mc_clips WHERE id=? AND event_id=?').bind(id, eventId).first<any>();
   let clip = await find();
@@ -38,7 +39,7 @@ export async function prepareMc(env: SpeechEnv, eventId: string, plan: McPlan) {
       let stream: ReadableStream;
       const input = {text: plan.text, speaker: MC_VOICE, encoding: 'mp3'};
       if (profile.provider === 'deepgram') {
-        const result = await fetch(`https://api.deepgram.com/v2/speak?model=${MC_MILES_MODEL}&encoding=mp3`, {
+        const result = await fetch(milesSpeechUrl(), {
           method: 'POST', headers: {Authorization: `Token ${env.DEEPGRAM_API_KEY!.trim()}`, 'Content-Type': 'application/json'},
           body: JSON.stringify({text: plan.text}), signal: AbortSignal.timeout(18000),
         });

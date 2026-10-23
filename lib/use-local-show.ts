@@ -44,6 +44,7 @@ export function useLocalShow(options: {snapshot: any; admin: boolean; manager: M
     if (!plan) return null;
     const live = current.current.mc.get(plan);
     if (live) return {...live, source: live.url};
+    if (saved.current?.voiceKey !== (current.current.snapshot?.mcVoiceKey || current.current.snapshot?.mcVoice || 'Zeus')) return null;
     let clip = saved.current?.clips.find(c => c.context === plan.context);
     // A generic playlist recording may be reused only when it names no rapper
     // and the actual next track is the same. Never call the wrong performer.
@@ -64,12 +65,14 @@ export function useLocalShow(options: {snapshot: any; admin: boolean; manager: M
   const patch = (data: any) => {if (!manager.current) return null; manager.current.patch(data);publishShow();void sync().catch(() => {});return manager.current.snapshot;};
   const saveClip = async (clip: any, signal?: AbortSignal) => {
     const manifest = saved.current;if (!manifest || savingClip.current.has(clip.id)) return;
+    const voiceKey = current.current.snapshot?.mcVoiceKey || current.current.snapshot?.mcVoice || 'Zeus';
+    if (manifest.voiceKey !== voiceKey) {manifest.clips = [];manifest.voiceKey = voiceKey;}
     if (manifest.clips.some(c => c.id === clip.id)) return;
     savingClip.current.add(clip.id);
     try {
       const source = `/api/mc-audio/${clip.id}`, response = await fetch(clip.url || clip.audioUrl || source, {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000)});
-      if (!response.ok) return;
-      const blob = await response.blob();if (!blob.size || !blob.type.startsWith('audio/')) return;
+      if (!response.ok || response.status === 206 || response.headers.has('content-range')) return;
+      const blob = await response.blob(), expected = Number(response.headers.get('content-length'));if (!blob.size || !blob.type.startsWith('audio/') || expected > 0 && blob.size !== expected) return;
       await store.current.put('audio', audioKey(manifest.key, source), blob);
       if (saved.current !== manifest) return;
       manifest.clips = [...manifest.clips.filter(c => c.context !== clip.context), {id: clip.id, context: clip.context, text: clip.text, source}];

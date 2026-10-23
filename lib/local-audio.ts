@@ -1,6 +1,6 @@
 export type SavedClip = {id: string; context: string; text: string; source: string};
 export type AudioSpec = {source: string; label: string};
-export type SavedShow = {key: string; owner: string; eventId: string; fingerprint: string; sources: AudioSpec[]; clips: SavedClip[]; bytes: number; savedAt: number};
+export type SavedShow = {key: string; owner: string; eventId: string; fingerprint: string; sources: AudioSpec[]; clips: SavedClip[]; voiceKey?: string; bytes: number; savedAt: number};
 export interface LocalStore {
   get<T>(store: 'audio' | 'shows' | 'checkpoints', key: string): Promise<T | undefined>;
   put(store: 'audio' | 'shows' | 'checkpoints', key: string, value: any): Promise<void>;
@@ -58,7 +58,7 @@ export async function downloadShow(options: {store: LocalStore; owner: string; e
   const key = showKey(owner, eventId), sources = showSources(tracks);
   if (!sources.length) throw Error('Upload the set before downloading it.');
   const previous = await store.get<SavedShow>('shows', key);
-  const draft: SavedShow = {key, owner, eventId, fingerprint: showFingerprint(tracks), sources, clips: previous?.clips || [], bytes: 0, savedAt: Date.now()};
+  const draft: SavedShow = {key, owner, eventId, fingerprint: showFingerprint(tracks), sources, clips: previous?.clips || [], voiceKey: previous?.voiceKey, bytes: 0, savedAt: Date.now()};
   await store.put('shows', key, draft);
   let bytes = 0;
   for (let index = 0; index < sources.length; index++) {
@@ -74,7 +74,7 @@ export async function downloadShow(options: {store: LocalStore; owner: string; e
     bytes += blob.size;
   }
   signal?.throwIfAborted();
-  const saved: SavedShow = {key, owner, eventId, fingerprint: showFingerprint(tracks), sources, clips: previous?.clips || [], bytes, savedAt: Date.now()};
+  const saved: SavedShow = {key, owner, eventId, fingerprint: showFingerprint(tracks), sources, clips: previous?.clips || [], voiceKey: previous?.voiceKey, bytes, savedAt: Date.now()};
   await store.put('shows', key, saved);
   // Replacements cannot reuse old revisions. Clean up only after the complete
   // new manifest committed, leaving retriable downloads safe on cancellation.
